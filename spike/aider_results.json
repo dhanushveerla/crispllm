@@ -1,0 +1,19 @@
+{
+  "repo_path": "/home/dhanush/projects/edgemem-scratch/sample-repo",
+  "files_scanned": 83,
+  "raw_tokens": 134903,
+  "repomap_tokens": 1021,
+  "compression_pct": 99.24,
+  "cold_latency_ms": 643.07,
+  "process_rss_start_mb": 40.98,
+  "process_rss_end_mb": 84.51,
+  "process_rss_delta_mb": 43.53,
+  "minimal_deps": [
+    "grep-ast",
+    "tree-sitter-language-pack",
+    "networkx",
+    "psutil",
+    "tiktoken"
+  ],
+  "map_preview": "### src/flask/cli.py (rank: 0.0826)\n\u2502from __future__ import annotations\n\u2502\n\u2502import ast\n\u22ee\n\u2502class NoAppException(click.UsageError):\n\u2588    \"\"\"Raised if an application cannot be found or loaded.\"\"\"\n\u2502\n\u2502\n\u2502def find_best_app(module: ModuleType) -> Flask:\n\u2588    \"\"\"Given a module instance this tries to find the best possible\n\u2502    application in the module or raises an exception.\n\u22ee\n\u2502    for attr_name in (\"create_app\", \"make_app\"):\n\u2502        app_factory = getattr(module, attr_name, None)\n\u2502\n\u2502        if inspect.i..."
+}

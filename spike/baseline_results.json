@@ -1,0 +1,72 @@
+{
+  "timestamp": 1795105881.0696578,
+  "model": "qwen3.5:2b-q4_K_M",
+  "base_url": "http://127.0.0.1:11434/v1",
+  "reasoning_effort": "none",
+  "max_tokens": 128,
+  "ollama_idle_rss_mb": 2052.5,
+  "ollama_peak_rss_mb": 2097.75,
+  "streaming_success": true,
+  "tool_calling_success": true,
+  "avg_ttft_ms": 11759.3,
+  "avg_speed_tok_s": 1.18,
+  "prompts": [
+    {
+      "ttft_ms": 6395.98,
+      "generation_duration_s": 56.763,
+      "total_duration_s": 63.159,
+      "generated_tokens": 84,
+      "tok_per_sec": 1.48,
+      "content_length": 294,
+      "reasoning_length": 0,
+      "reasoning_empty": true,
+      "tool_calls": [],
+      "finish_reason": "stop",
+      "content_preview": "```python\ndef is_palindrome(s: str) -> bool:\n    \"\"\"Check if a string is a palindrome (ignoring non-",
+      "prompt_id": "prompt_1",
+      "name": "is_palindrome",
+      "type": "code"
+    },
+    {
+      "ttft_ms": 5839.76,
+      "generation_duration_s": 25.619,
+      "total_duration_s": 31.459,
+      "generated_tokens": 53,
+      "tok_per_sec": 2.07,
+      "content_length": 139,
+      "reasoning_length": 0,
+      "reasoning_empty": true,
+      "tool_calls": [],
+      "finish_reason": "stop",
+      "content_preview": "```python\ndef fib(n: int):\n    if n <= 0:\n        return\n    a, b = 0, 1\n    for _ in range(n):",
+      "prompt_id": "prompt_2",
+      "name": "fibonacci_gen",
+      "type": "code"
+    },
+    {
+      "ttft_ms": 23042.17,
+      "generation_duration_s": 0.387,
+      "total_duration_s": 23.429,
+      "generated_tokens": 0,
+      "tok_per_sec": 0.0,
+      "content_length": 0,
+      "reasoning_length": 0,
+      "reasoning_empty": true,
+      "tool_calls": [
+        {
+          "id": "call_oor8xbas",
+          "type": "function",
+          "function": {
+            "name": "fetch_file_ast",
+            "arguments": "{\"file_path\":\"src/edgemem/proxy.py\",\"max_depth\":3}"
+          }
+        }
+      ],
+      "finish_reason": "tool_calls",
+      "content_preview": "",
+      "prompt_id": "prompt_3",
+      "name": "tool_calling_ast",
+      "type": "tool_call"
+    }
+  ]
+}
