@@ -114,10 +114,10 @@ base_url = "http://127.0.0.1:11434/v1"
 # api_key_env = "OPENAI_API_KEY"  # env var name holding the API key
 model = "qwen3.5:2b-q4_K_M"
 
-# Optional extra body fields merged into every upstream request.
-# Useful for model-specific flags without hardcoding them.
-# [upstream.extra_body]
-# reasoning_effort = "none"
+# Extra body fields merged into every upstream request.
+# Client-sent keys take precedence (never overwritten).
+[upstream.extra_body]
+reasoning_effort = "none"
 
 [telemetry]
 # dir = "/custom/path"  # defaults to platformdirs user_data_dir("edgemem")

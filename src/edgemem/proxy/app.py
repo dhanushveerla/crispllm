@@ -10,6 +10,8 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import logging
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
@@ -23,7 +25,7 @@ from edgemem.proxy.mcp_server import create_mcp_server, create_mcp_starlette_app
 from edgemem.proxy.streaming import (
     count_output_tokens_from_sse,
     estimate_tokens_from_messages,
-    stream_sse_passthrough,
+    stream_with_heartbeat,
 )
 from edgemem.proxy.telemetry import (
     RequestTelemetry,
@@ -31,6 +33,8 @@ from edgemem.proxy.telemetry import (
     Timer,
     get_rss_mb,
 )
+
+logger = logging.getLogger("edgemem.proxy")
 
 
 def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
@@ -54,7 +58,9 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         tel = TelemetryLogger(cfg.telemetry_path)
         client = httpx.AsyncClient(
             base_url=cfg.upstream_base_url,
-            timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0),
+            timeout=httpx.Timeout(
+                connect=10.0, read=600.0, write=30.0, pool=10.0
+            ),
         )
 
         # Wire telemetry into MCP tools
@@ -104,7 +110,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         )
 
     @app.post("/v1/chat/completions", response_model=None)
-    async def chat_completions(request: Request) -> StreamingResponse | JSONResponse:
+    async def chat_completions(request: Request) -> StreamingResponse | JSONResponse | Response:
         c: EdgeMemConfig = request.app.state.edgemem_config
         client: httpx.AsyncClient = request.app.state.edgemem_http_client
         tel: TelemetryLogger = request.app.state.edgemem_telemetry
@@ -116,16 +122,30 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         upstream_body = _build_upstream_body(body, c)
         input_tokens = estimate_tokens_from_messages(body.get("messages", []))
 
+        logger.info(
+            "Incoming request: stream=%s, est_prompt_tokens=%d, model=%s",
+            is_stream,
+            input_tokens,
+            upstream_body.get("model", "?"),
+        )
+
         headers = _upstream_headers(c)
 
-        if is_stream:
-            return await _handle_streaming(
-                client, upstream_body, headers, input_tokens, c.model, tel
-            )
-        else:
-            return await _handle_non_streaming(
-                client, upstream_body, headers, input_tokens, c.model, tel
-            )
+        try:
+            if is_stream:
+                return await _handle_streaming(
+                    client, upstream_body, headers, input_tokens, c.model, tel
+                )
+            else:
+                return await _handle_non_streaming(
+                    client, upstream_body, headers, input_tokens, c.model, tel
+                )
+        except httpx.HTTPError:
+            logger.exception("Upstream HTTP error")
+            raise
+        except Exception:
+            logger.exception("Unexpected error in chat_completions")
+            raise
 
     # Mount MCP Starlette app — mounted AFTER explicit routes so FastAPI
     # routes match first. Mount path="" so the internal /mcp route resolves
@@ -141,12 +161,16 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
 
 
 def _build_upstream_body(body: dict[str, Any], cfg: EdgeMemConfig) -> dict[str, Any]:
-    """Build the upstream request body, merging extra_body fields."""
+    """Build the upstream request body, merging extra_body fields.
+
+    extra_body keys from config are injected only if the client did NOT
+    already send them — client-sent keys always take precedence.
+    """
     upstream = dict(body)
     # Ensure model is set
     if "model" not in upstream or not upstream["model"]:
         upstream["model"] = cfg.model
-    # Merge extra_body — user request fields take precedence
+    # Merge extra_body — client-sent keys take precedence
     if cfg.extra_body:
         for k, v in cfg.extra_body.items():
             if k not in upstream:
@@ -170,18 +194,53 @@ async def _handle_non_streaming(
     input_tokens: int,
     model: str,
     tel: TelemetryLogger,
-) -> JSONResponse:
+) -> Response:
     """Forward a non-streaming chat completion and log telemetry."""
     timer = Timer()
     with timer:
         resp = await client.post("/chat/completions", json=body, headers=headers)
         timer.mark_first_token()
 
-    data = resp.json()
+    if resp.status_code >= 400:
+        snippet = resp.text[:500]
+        logger.warning(
+            "Upstream error response (status=%d): %s",
+            resp.status_code,
+            snippet,
+        )
+        tel.log(
+            RequestTelemetry(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=0,
+                ttft_ms=round(timer.ttft_ms, 2),
+                total_latency_ms=round(timer.total_ms, 2),
+                proxy_rss_mb=round(get_rss_mb(), 2),
+                stream=False,
+            )
+        )
+        try:
+            error_data = resp.json()
+            return JSONResponse(content=error_data, status_code=resp.status_code)
+        except Exception:
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                media_type=resp.headers.get("content-type", "text/plain"),
+            )
+
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
 
     # Extract output tokens
-    usage = data.get("usage", {})
-    output_tokens = usage.get("completion_tokens", 0)
+    output_tokens = 0
+    if isinstance(data, dict):
+        usage = data.get("usage")
+        if isinstance(usage, dict):
+            output_tokens = usage.get("completion_tokens", 0)
 
     tel.log(
         RequestTelemetry(
@@ -196,7 +255,13 @@ async def _handle_non_streaming(
         )
     )
 
-    return JSONResponse(data, status_code=resp.status_code)
+    if isinstance(data, (dict, list)):
+        return JSONResponse(content=data, status_code=resp.status_code)
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type=resp.headers.get("content-type", "text/plain"),
+    )
 
 
 async def _handle_streaming(
@@ -207,21 +272,22 @@ async def _handle_streaming(
     model: str,
     tel: TelemetryLogger,
 ) -> StreamingResponse:
-    """Forward a streaming chat completion, passing SSE chunks through faithfully."""
+    """Forward a streaming chat completion with keepalive heartbeats."""
     timer = Timer()
     timer.__enter__()
 
     async def generate() -> AsyncIterator[str]:
         output_tokens = 0
         try:
-            async with client.stream(
-                "POST", "/chat/completions", json=body, headers=headers
-            ) as resp:
-                async for sse_line in stream_sse_passthrough(
-                    resp, on_first_data=timer.mark_first_token
-                ):
-                    output_tokens += count_output_tokens_from_sse(sse_line)
-                    yield sse_line
+            async for sse_line in stream_with_heartbeat(
+                client, body, headers,
+                on_first_data=timer.mark_first_token,
+            ):
+                output_tokens += count_output_tokens_from_sse(sse_line)
+                yield sse_line
+        except Exception:
+            logger.exception("Error during streaming response")
+            raise
         finally:
             timer.__exit__(None, None, None)
             tel.log(
