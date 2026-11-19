@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "edgemem": {
+      "name": "EdgeMem Proxy",
+      "api": "@ai-sdk/openai-compatible",
+      "baseURL": "http://127.0.0.1:8080/v1",
+      "models": {
+        "default": {
+          "id": "qwen3.5:2b-q4_K_M",
+          "name": "EdgeMem → Local Qwen 2B"
+        }
+      }
+    }
+  }
+}
