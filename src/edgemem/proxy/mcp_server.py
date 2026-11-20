@@ -12,24 +12,37 @@ from mcp.server.mcpserver import MCPServer
 from starlette.applications import Starlette
 
 if TYPE_CHECKING:
+    from edgemem.memory.store import MemoryStore
     from edgemem.proxy.telemetry import TelemetryLogger
 
 
-def create_mcp_server() -> MCPServer:
+def create_mcp_server(memory_store: MemoryStore | None = None) -> MCPServer:
     """Create the MCPServer instance with EdgeMem tools registered."""
     mcp = MCPServer("EdgeMem")
 
-    # Tools are registered below; the actual implementations reference
-    # a TelemetryLogger that gets attached after creation via set_telemetry().
+    # Tools reference telemetry and memory store attached via setters or constructor
     _telemetry_ref: dict[str, Any] = {"logger": None, "config": None}
+    _memory_ref: dict[str, Any] = {"store": memory_store}
 
     def set_telemetry(logger: TelemetryLogger, config: Any) -> None:
         _telemetry_ref["logger"] = logger
         _telemetry_ref["config"] = config
 
-    # Attach setter so the app module can wire it up
+    def set_memory(store: MemoryStore) -> None:
+        _memory_ref["store"] = store
+
+    def _get_store() -> MemoryStore:
+        if _memory_ref["store"] is None:
+            from edgemem.memory.store import MemoryStore
+
+            _memory_ref["store"] = MemoryStore()
+        return _memory_ref["store"]
+
+    # Attach setters so the app module can wire them up
     mcp._edgemem_set_telemetry = set_telemetry  # type: ignore[attr-defined]
     mcp._edgemem_telemetry_ref = _telemetry_ref  # type: ignore[attr-defined]
+    mcp._edgemem_set_memory = set_memory  # type: ignore[attr-defined]
+    mcp._edgemem_memory_ref = _memory_ref  # type: ignore[attr-defined]
 
     @mcp.tool()
     async def edgemem_status() -> dict:
@@ -61,6 +74,96 @@ def create_mcp_server() -> MCPServer:
             "status": "ok",
             "proxy_rss_mb": round(get_rss_mb(), 2),
         }
+
+    @mcp.tool()
+    async def edgemem_remember(
+        key: str,
+        value: str,
+        kind: str = "note",
+        scope: str = "global",
+        pinned: bool = True,
+    ) -> dict:
+        """Store a fact, constraint, or note in EdgeMem tiered memory.
+
+        Args:
+            key: Unique identifier/name for the fact (e.g. constant name or constraint topic).
+            value: The content, signature, or directive text.
+            kind: Type of fact: 'constraint', 'constant', 'signature', 'decision', 'note'.
+            scope: Accessibility scope: 'global', 'project', or 'session'.
+            pinned: Whether this fact is persistently injected into prompts.
+        """
+        store = _get_store()
+        fid = store.upsert_fact(
+            session_id="global",
+            key=key,
+            value=value,
+            kind=kind,
+            scope=scope,
+            pinned=pinned,
+        )
+        return {"status": "ok", "fact_id": fid, "key": key}
+
+    @mcp.tool()
+    async def edgemem_recall(query: str, limit: int = 8) -> dict:
+        """Search EdgeMem memory for relevant facts using BM25 FTS5 ranking.
+
+        Args:
+            query: Search query or prompt.
+            limit: Maximum number of matches to return.
+        """
+        store = _get_store()
+        facts = store.search_facts(query=query, limit=limit)
+        return {
+            "query": query,
+            "facts": [
+                {
+                    "id": f.id,
+                    "session_id": f.session_id,
+                    "kind": f.kind,
+                    "key": f.key,
+                    "value": f.value,
+                    "scope": f.scope,
+                    "pinned": f.pinned,
+                }
+                for f in facts
+            ],
+        }
+
+    @mcp.tool()
+    async def edgemem_list_facts(kind: str | None = None, limit: int = 20) -> dict:
+        """List stored facts in EdgeMem memory.
+
+        Args:
+            kind: Optional filter by kind: 'constraint', 'constant', 'signature', 'decision', 'note'.
+            limit: Maximum facts to return.
+        """
+        store = _get_store()
+        facts = store.list_facts(kind=kind, limit=limit)
+        return {
+            "facts": [
+                {
+                    "id": f.id,
+                    "session_id": f.session_id,
+                    "kind": f.kind,
+                    "key": f.key,
+                    "value": f.value,
+                    "scope": f.scope,
+                    "pinned": f.pinned,
+                }
+                for f in facts
+            ]
+        }
+
+    @mcp.tool()
+    async def edgemem_forget(fact_id: int) -> dict:
+        """Delete a fact from EdgeMem memory by its ID.
+
+        Args:
+            fact_id: The integer ID of the fact to remove.
+        """
+        store = _get_store()
+        deleted = store.delete_fact(fact_id)
+        return {"status": "ok" if deleted else "not_found", "fact_id": fact_id}
 
     @mcp.tool()
     async def edgemem_repo_map(

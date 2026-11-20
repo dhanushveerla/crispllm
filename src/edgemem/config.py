@@ -7,10 +7,10 @@ with sensible defaults for all values.
 
 from __future__ import annotations
 
-import os
-import tomllib
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
+import tomllib
 from typing import Any
 
 import platformdirs
@@ -22,6 +22,17 @@ def _default_config_paths() -> list[Path]:
         Path("edgemem.toml"),
         platformdirs.user_config_path("edgemem") / "edgemem.toml",
     ]
+
+
+@dataclass
+class MemoryConfig:
+    """Configuration for EdgeMem SQLite-backed tiered memory."""
+
+    enabled: bool = True
+    max_injected_tokens: int = 384
+    inject_constraints: bool = True
+    auto_extract: bool = True
+    db_path: str | None = None
 
 
 @dataclass
@@ -43,6 +54,9 @@ class EdgeMemConfig:
 
     # Telemetry
     telemetry_dir: str = ""  # empty = use platformdirs default
+
+    # Memory
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
 
     @property
     def upstream_api_key(self) -> str | None:
@@ -83,10 +97,23 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         except FileNotFoundError:
             continue
 
-    # Flatten [server] and [upstream] sections
+    # Flatten [server], [upstream], [telemetry], and [memory] sections
     server = raw.get("server", {})
     upstream = raw.get("upstream", {})
     telemetry = raw.get("telemetry", {})
+    memory = raw.get("memory", {})
+
+    memory_cfg = MemoryConfig(
+        enabled=memory.get("enabled", MemoryConfig.enabled),
+        max_injected_tokens=memory.get(
+            "max_injected_tokens", MemoryConfig.max_injected_tokens
+        ),
+        inject_constraints=memory.get(
+            "inject_constraints", MemoryConfig.inject_constraints
+        ),
+        auto_extract=memory.get("auto_extract", MemoryConfig.auto_extract),
+        db_path=memory.get("db_path", MemoryConfig.db_path),
+    )
 
     return EdgeMemConfig(
         host=server.get("host", EdgeMemConfig.host),
@@ -96,6 +123,7 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         model=upstream.get("model", EdgeMemConfig.model),
         extra_body=upstream.get("extra_body", {}),
         telemetry_dir=telemetry.get("dir", EdgeMemConfig.telemetry_dir),
+        memory=memory_cfg,
     )
 
 
@@ -121,4 +149,11 @@ reasoning_effort = "none"
 
 [telemetry]
 # dir = "/custom/path"  # defaults to platformdirs user_data_dir("edgemem")
+
+[memory]
+enabled = true
+max_injected_tokens = 384
+inject_constraints = true
+auto_extract = true
+# db_path = "/custom/memory.db"  # defaults to platformdirs user_data_dir("edgemem") / "memory.db"
 """

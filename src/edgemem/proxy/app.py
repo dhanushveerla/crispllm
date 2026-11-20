@@ -21,7 +21,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from edgemem.config import EdgeMemConfig
+from edgemem.memory.store import MemoryStore
 from edgemem.proxy.mcp_server import create_mcp_server, create_mcp_starlette_app
+from edgemem.proxy.middleware import MemoryMiddleware
 from edgemem.proxy.streaming import (
     count_output_tokens_from_sse,
     estimate_tokens_from_messages,
@@ -48,8 +50,12 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
 
         cfg = load_config()
 
+    # Create MemoryStore and Middleware
+    memory_store = MemoryStore(cfg.memory.db_path)
+    memory_middleware = MemoryMiddleware(memory_store, cfg.memory)
+
     # Create MCP server and its Starlette sub-app
-    mcp_server = create_mcp_server()
+    mcp_server = create_mcp_server(memory_store=memory_store)
     mcp_app = create_mcp_starlette_app(mcp_server)
 
     @asynccontextmanager
@@ -69,6 +75,8 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         app.state.edgemem_config = cfg
         app.state.edgemem_http_client = client
         app.state.edgemem_telemetry = tel
+        app.state.edgemem_memory_store = memory_store
+        app.state.edgemem_memory_middleware = memory_middleware
 
         # Start MCP session manager inside our lifespan
         session_mgr = mcp_server.session_manager
@@ -76,6 +84,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
             yield
 
         await client.aclose()
+        memory_store.close()
 
     app = FastAPI(title="EdgeMem Proxy", version="0.1.0", lifespan=lifespan)
 
@@ -84,12 +93,16 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
     @app.get("/health")
     async def health(request: Request) -> JSONResponse:
         c: EdgeMemConfig = request.app.state.edgemem_config
+        mem_store: MemoryStore = request.app.state.edgemem_memory_store
+        mem_stats = mem_store.stats()
         return JSONResponse(
             {
                 "status": "ok",
                 "upstream_base_url": c.upstream_base_url,
                 "model": c.model,
                 "rss_mb": round(get_rss_mb(), 2),
+                "memory_enabled": c.memory.enabled,
+                "facts_count": mem_stats["facts_count"],
             }
         )
 
@@ -114,13 +127,26 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         c: EdgeMemConfig = request.app.state.edgemem_config
         client: httpx.AsyncClient = request.app.state.edgemem_http_client
         tel: TelemetryLogger = request.app.state.edgemem_telemetry
+        middleware: MemoryMiddleware = request.app.state.edgemem_memory_middleware
 
         body = await request.json()
         is_stream = body.get("stream", False)
 
+        # Process active memory injection
+        body, mem_telemetry = middleware.process_request(body, request.headers)
+        if (
+            mem_telemetry.get("facts_extracted", 0) > 0
+            or mem_telemetry.get("memory_injected_tokens", 0) > 0
+        ):
+            logger.info(
+                "Memory middleware applied: extracted=%d facts, injected=%d tokens",
+                mem_telemetry["facts_extracted"],
+                mem_telemetry["memory_injected_tokens"],
+            )
+
         # Build upstream request body — keep system/tools prefix byte-identical
         upstream_body = _build_upstream_body(body, c)
-        input_tokens = estimate_tokens_from_messages(body.get("messages", []))
+        input_tokens = estimate_tokens_from_messages(upstream_body.get("messages", []))
 
         logger.info(
             "Incoming request: stream=%s, est_prompt_tokens=%d, model=%s",

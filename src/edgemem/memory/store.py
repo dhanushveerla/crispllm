@@ -60,9 +60,19 @@ class MemoryStore:
         self._lock = threading.RLock()
 
         if not self._is_memory:
-            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+            try:
+                Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                self.db_path = ":memory:"
+                self._is_memory = True
 
-        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        try:
+            self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        except (sqlite3.OperationalError, OSError):
+            self.db_path = ":memory:"
+            self._is_memory = True
+            self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+
         self._conn.row_factory = sqlite3.Row
 
         with self._lock:

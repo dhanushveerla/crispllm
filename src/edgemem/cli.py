@@ -1,6 +1,6 @@
 """EdgeMem CLI — console entrypoint.
 
-Supports: edgemem serve, edgemem init, edgemem status, edgemem slice.
+Supports: edgemem serve, edgemem init, edgemem status, edgemem slice, edgemem memory.
 """
 
 from __future__ import annotations
@@ -70,6 +70,9 @@ def status(config_path: Path | None) -> None:
         click.echo(f"Upstream: {data.get('upstream_base_url', 'N/A')}")
         click.echo(f"Model: {data.get('model', 'N/A')}")
         click.echo(f"RSS: {data.get('rss_mb', 'N/A')} MB")
+        memory_enabled = data.get("memory_enabled", False)
+        facts_count = data.get("facts_count", 0)
+        click.echo(f"Memory: {'enabled' if memory_enabled else 'disabled'} ({facts_count} facts)")
     except httpx.ConnectError:
         click.echo(f"EdgeMem not running at {url}", err=True)
         sys.exit(1)
@@ -133,3 +136,67 @@ def slice(
         f"compression={compression_pct:.1f}%  latency={elapsed_ms:.0f}ms",
         err=True,
     )
+
+
+@cli.group()
+def memory() -> None:
+    """Manage EdgeMem SQLite tiered memory store."""
+
+
+@memory.command("list")
+@click.option("--kind", default=None, help="Filter facts by kind (constraint, constant, signature, note).")
+@click.option("--limit", default=50, type=int, help="Max facts to return.")
+@click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path))
+def memory_list(kind: str | None, limit: int, config_path: Path | None) -> None:
+    """List stored facts in EdgeMem memory."""
+    from edgemem.memory.store import MemoryStore
+
+    cfg = load_config(config_path)
+    with MemoryStore(cfg.memory.db_path) as store:
+        facts = store.list_facts(kind=kind, limit=limit)
+        if not facts:
+            click.echo("No facts stored.")
+            return
+
+        click.echo(f"Stored facts ({len(facts)}):")
+        for f in facts:
+            pin_badge = "[PINNED] " if f.pinned else ""
+            click.echo(f"  #{f.id} [{f.kind}] {pin_badge}{f.key} = {f.value}")
+
+
+@memory.command("search")
+@click.argument("query")
+@click.option("--limit", default=10, type=int, help="Max results.")
+@click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path))
+def memory_search(query: str, limit: int, config_path: Path | None) -> None:
+    """Search EdgeMem memory using BM25 FTS5 ranking."""
+    from edgemem.memory.store import MemoryStore
+
+    cfg = load_config(config_path)
+    with MemoryStore(cfg.memory.db_path) as store:
+        facts = store.search_facts(query, limit=limit)
+        if not facts:
+            click.echo("No matches found.")
+            return
+
+        click.echo(f"Search results for '{query}' ({len(facts)}):")
+        for f in facts:
+            pin_badge = "[PINNED] " if f.pinned else ""
+            click.echo(f"  #{f.id} [{f.kind}] {pin_badge}{f.key} = {f.value}")
+
+
+@memory.command("clear")
+@click.option("--session", default=None, help="Clear facts for a specific session ID only.")
+@click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path))
+def memory_clear(session: str | None, config_path: Path | None) -> None:
+    """Clear facts from EdgeMem memory."""
+    from edgemem.memory.store import MemoryStore
+
+    cfg = load_config(config_path)
+    with MemoryStore(cfg.memory.db_path) as store:
+        if session:
+            count = store.clear_session(session)
+            click.echo(f"Cleared {count} facts for session '{session}'.")
+        else:
+            count = store.clear_all()
+            click.echo(f"Cleared all {count} facts from memory.")

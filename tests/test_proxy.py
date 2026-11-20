@@ -22,7 +22,7 @@ import httpx
 import pytest
 from starlette.testclient import TestClient
 
-from edgemem.config import EdgeMemConfig
+from edgemem.config import EdgeMemConfig, MemoryConfig
 from edgemem.proxy.app import create_app
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -36,6 +36,7 @@ def _make_config(tmp_path, **overrides) -> EdgeMemConfig:
         upstream_base_url="http://mock-upstream",
         model="test-model",
         telemetry_dir=str(tmp_path / "telemetry"),
+        memory=MemoryConfig(db_path=str(tmp_path / "memory.db")),
     )
     defaults.update(overrides)
     return EdgeMemConfig(**defaults)
