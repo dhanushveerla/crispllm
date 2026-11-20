@@ -32,6 +32,7 @@ from edgemem.proxy.streaming import (
 from edgemem.proxy.telemetry import (
     RequestTelemetry,
     TelemetryLogger,
+    TelemetryStore,
     Timer,
     get_rss_mb,
 )
@@ -260,6 +261,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         cfg = load_config()
 
     memory_store = MemoryStore(cfg.memory.db_path)
+    telemetry_store = TelemetryStore(cfg.memory.db_path)
     memory_middleware = MemoryMiddleware(memory_store, cfg.memory)
     router = HybridRouter(cfg)
     redaction_config = RedactionConfig(
@@ -290,6 +292,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         app.state.edgemem_config = cfg
         app.state.edgemem_http_client = client
         app.state.edgemem_telemetry = tel
+        app.state.edgemem_telemetry_store = telemetry_store
         app.state.edgemem_memory_store = memory_store
         app.state.edgemem_memory_middleware = memory_middleware
         app.state.edgemem_router = router
@@ -302,8 +305,16 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
 
         await client.aclose()
         memory_store.close()
+        telemetry_store.close()
 
     app = FastAPI(title="EdgeMem Proxy", version="0.1.0", lifespan=lifespan)
+    app.state.edgemem_telemetry_store = telemetry_store
+    app.state.edgemem_config = cfg
+    app.state.edgemem_memory_store = memory_store
+    app.state.edgemem_memory_middleware = memory_middleware
+    app.state.edgemem_router = router
+    app.state.edgemem_redactor = redactor
+    app.state.edgemem_counters = counters
 
     @app.get("/health")
     async def health(request: Request) -> JSONResponse:
@@ -352,6 +363,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         c: EdgeMemConfig = request.app.state.edgemem_config
         client: httpx.AsyncClient = request.app.state.edgemem_http_client
         tel: TelemetryLogger = request.app.state.edgemem_telemetry
+        tel_store: TelemetryStore = request.app.state.edgemem_telemetry_store
         middleware: MemoryMiddleware = request.app.state.edgemem_memory_middleware
         app_router: HybridRouter = request.app.state.edgemem_router
         app_redactor: SecretRedactor = request.app.state.edgemem_redactor
@@ -360,7 +372,12 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         body = await request.json()
         is_stream = body.get("stream", False)
 
+        est_tokens_raw = estimate_tokens_from_messages(body.get("messages", []))
         body, mem_telemetry = middleware.process_request(body, request.headers)
+        est_tokens_sent = estimate_tokens_from_messages(body.get("messages", []))
+        tokens_saved = max(0, est_tokens_raw - est_tokens_sent)
+        compacted_turns = mem_telemetry.get("compacted_turns", 0)
+
         if (
             mem_telemetry.get("facts_extracted", 0) > 0
             or mem_telemetry.get("memory_injected_tokens", 0) > 0
@@ -373,7 +390,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 mem_telemetry["compacted_turns"],
             )
 
-        input_tokens = estimate_tokens_from_messages(body.get("messages", []))
+        input_tokens = est_tokens_sent
         target = app_router.select_target(body, request.headers, input_tokens)
         upstream_body, session, headers = _prepare_payload_for_target(
             body, target, app_redactor, app_router
@@ -401,6 +418,11 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 app_router,
                 app_redactor,
                 cnt,
+                tel_store,
+                est_tokens_raw,
+                est_tokens_sent,
+                tokens_saved,
+                compacted_turns,
             )
         else:
             return await _handle_non_streaming_request(
@@ -415,6 +437,11 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 app_router,
                 app_redactor,
                 cnt,
+                tel_store,
+                est_tokens_raw,
+                est_tokens_sent,
+                tokens_saved,
+                compacted_turns,
             )
 
     app.mount("", mcp_app)
@@ -437,6 +464,11 @@ async def _handle_non_streaming_request(
     router: HybridRouter,
     redactor: SecretRedactor,
     counters: ProxyCounters,
+    tel_store: TelemetryStore,
+    est_tokens_raw: int,
+    est_tokens_sent: int,
+    tokens_saved: int,
+    compacted_turns: int,
 ) -> Response:
     timer = Timer()
     timer.__enter__()
@@ -444,6 +476,7 @@ async def _handle_non_streaming_request(
     fallback_target = (
         router.cloud_fallback_target(body) if target.tier == "local" else None
     )
+    fallback_used = False
 
     target_url = f"{target.base_url.rstrip('/')}/chat/completions"
 
@@ -462,6 +495,7 @@ async def _handle_non_streaming_request(
 
         if resp is None:
             counters.inc_fallback()
+            fallback_used = True
             target = fallback_target
             upstream_body, session, headers = _prepare_payload_for_target(
                 body, target, redactor, router
@@ -525,6 +559,18 @@ async def _handle_non_streaming_request(
                 stream=False,
             )
         )
+        tel_store.record(
+            route_tier=target.tier,
+            route_reason=target.reason,
+            model=target.model,
+            est_tokens_raw=est_tokens_raw,
+            est_tokens_sent=est_tokens_sent,
+            tokens_saved=tokens_saved,
+            compacted_turns=compacted_turns,
+            secrets_redacted=redacted_count,
+            fallback_used=1 if fallback_used else 0,
+            latency_ms=round(timer.total_ms, 2),
+        )
         try:
             error_data = resp.json()
             return JSONResponse(
@@ -566,6 +612,18 @@ async def _handle_non_streaming_request(
             stream=False,
         )
     )
+    tel_store.record(
+        route_tier=target.tier,
+        route_reason=target.reason,
+        model=target.model,
+        est_tokens_raw=est_tokens_raw,
+        est_tokens_sent=est_tokens_sent,
+        tokens_saved=tokens_saved,
+        compacted_turns=compacted_turns,
+        secrets_redacted=redacted_count,
+        fallback_used=1 if fallback_used else 0,
+        latency_ms=round(timer.total_ms, 2),
+    )
 
     if isinstance(data, (dict, list)):
         return JSONResponse(
@@ -593,10 +651,16 @@ async def _handle_streaming_request(
     router: HybridRouter,
     redactor: SecretRedactor,
     counters: ProxyCounters,
+    tel_store: TelemetryStore,
+    est_tokens_raw: int,
+    est_tokens_sent: int,
+    tokens_saved: int,
+    compacted_turns: int,
 ) -> StreamingResponse:
     fallback_target = (
         router.cloud_fallback_target(body) if target.tier == "local" else None
     )
+    fallback_used = False
     opened_resp: httpx.Response | None = None
     target_url = f"{target.base_url.rstrip('/')}/chat/completions"
 
@@ -618,6 +682,7 @@ async def _handle_streaming_request(
 
         if opened_resp is None:
             counters.inc_fallback()
+            fallback_used = True
             target = fallback_target
             upstream_body, session, headers = _prepare_payload_for_target(
                 body, target, redactor, router
@@ -692,6 +757,19 @@ async def _handle_streaming_request(
                     proxy_rss_mb=round(get_rss_mb(), 2),
                     stream=True,
                 )
+            )
+
+            tel_store.record(
+                route_tier=target.tier,
+                route_reason=target.reason,
+                model=target.model,
+                est_tokens_raw=est_tokens_raw,
+                est_tokens_sent=est_tokens_sent,
+                tokens_saved=tokens_saved,
+                compacted_turns=compacted_turns,
+                secrets_redacted=redacted_count,
+                fallback_used=1 if fallback_used else 0,
+                latency_ms=round(timer.total_ms, 2),
             )
 
     return StreamingResponse(

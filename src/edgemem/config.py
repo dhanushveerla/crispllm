@@ -216,19 +216,59 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
     )
 
 
-def default_toml_content() -> str:
+def default_toml_content(preset: str = "hybrid") -> str:
     """Generate default edgemem.toml content for `edgemem init`."""
-    return """\
+    preset_lower = preset.lower()
+    if preset_lower == "hybrid":
+        return """\
 [server]
 host = "127.0.0.1"
 port = 8080
 
 [upstream]
 base_url = "http://127.0.0.1:11434/v1"
-model = "qwen3.5:2b-q4_K_M"
+model = "qwen2.5-coder:7b"
 
-[upstream.extra_body]
-reasoning_effort = "none"
+[telemetry]
+
+[memory]
+enabled = true
+max_injected_tokens = 384
+inject_constraints = true
+auto_extract = true
+compact_middle_turns = true
+compact_threshold_tokens = 2000
+compact_min_turn_tokens = 150
+keep_recent_turns = 2
+
+[cloud]
+enabled = true
+base_url = "https://integrate.api.nvidia.com/v1"
+api_key_env = "NVIDIA_API_KEY"
+model = "nvidia/nemotron-3.5-bolt-e4b"
+
+[routing]
+strategy = "local_first"
+escalate_token_threshold = 6000
+escalate_on_local_error = true
+local_timeout_s = 30.0
+
+[privacy]
+enabled = true
+redact_on_cloud_only = true
+redact_secrets = true
+redact_emails = true
+redact_ips = false
+"""
+    if preset_lower == "local":
+        return """\
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[upstream]
+base_url = "http://127.0.0.1:11434/v1"
+model = "qwen2.5-coder:7b"
 
 [telemetry]
 
@@ -249,7 +289,7 @@ api_key_env = ""
 model = ""
 
 [routing]
-strategy = "local_first"
+strategy = "local_only"
 escalate_token_threshold = 6000
 escalate_on_local_error = true
 local_timeout_s = 30.0
@@ -261,3 +301,88 @@ redact_secrets = true
 redact_emails = true
 redact_ips = false
 """
+    if preset_lower == "nvidia":
+        return """\
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[upstream]
+base_url = "https://integrate.api.nvidia.com/v1"
+api_key_env = "NVIDIA_API_KEY"
+model = "nvidia/nemotron-3.5-bolt-e4b"
+
+[telemetry]
+
+[memory]
+enabled = true
+max_injected_tokens = 384
+inject_constraints = true
+auto_extract = true
+compact_middle_turns = true
+compact_threshold_tokens = 2000
+compact_min_turn_tokens = 150
+keep_recent_turns = 2
+
+[cloud]
+enabled = false
+base_url = ""
+api_key_env = ""
+model = ""
+
+[routing]
+strategy = "local_only"
+escalate_token_threshold = 6000
+escalate_on_local_error = true
+local_timeout_s = 30.0
+
+[privacy]
+enabled = true
+redact_on_cloud_only = true
+redact_secrets = true
+redact_emails = true
+redact_ips = false
+"""
+    if preset_lower == "gemini":
+        return """\
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[upstream]
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+api_key_env = "GEMINI_API_KEY"
+model = "gemini-2.5-flash"
+
+[telemetry]
+
+[memory]
+enabled = true
+max_injected_tokens = 384
+inject_constraints = true
+auto_extract = true
+compact_middle_turns = true
+compact_threshold_tokens = 2000
+compact_min_turn_tokens = 150
+keep_recent_turns = 2
+
+[cloud]
+enabled = false
+base_url = ""
+api_key_env = ""
+model = ""
+
+[routing]
+strategy = "local_only"
+escalate_token_threshold = 6000
+escalate_on_local_error = true
+local_timeout_s = 30.0
+
+[privacy]
+enabled = true
+redact_on_cloud_only = true
+redact_secrets = true
+redact_emails = true
+redact_ips = false
+"""
+    raise ValueError(f"Unknown preset: {preset}")
