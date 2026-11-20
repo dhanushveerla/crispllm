@@ -486,6 +486,7 @@ def test_mcp_endpoint_initialize(client):
     assert resp.status_code == 200, f"MCP init failed: {resp.status_code} {resp.text}"
     init_data = resp.json()
     assert init_data.get("result", {}).get("serverInfo", {}).get("name") == "EdgeMem"
+    assert init_data.get("result", {}).get("serverInfo", {}).get("version") == "1.0.0"
 
     # Get session ID from response header for subsequent requests
     session_id = resp.headers.get("mcp-session-id")

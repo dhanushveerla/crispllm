@@ -4,6 +4,23 @@
 
 EdgeMem is a local-first, zero-bloat OpenAI-compatible LLM proxy and Model Context Protocol (MCP) server. It equips small local coding models (Ollama, vLLM, llama.cpp) and cloud APIs with tiered architectural memory, automatic middle-turn context compaction, reversible zero-dependency secret redaction, and intelligent local-to-cloud escalation — maintaining a **sub-85 MB RSS footprint** with **zero vector databases, zero embedding models, and zero extra LLM calls** on the request hot path.
 
+### Supported Platforms
+- **Tier 1 (Fully Supported)**: **Linux and macOS (Python 3.11+)**
+- **Experimental**: Windows (WorkingSetSize RSS measurement via `ctypes` Win32 API)
+
+---
+
+## Client Compatibility
+
+EdgeMem provides two interfaces on port 8080: an OpenAI-compatible `/v1` proxy and a Streamable HTTP `/mcp` server.
+
+| Client Category | Example Clients / Tools | `/v1` OpenAI Proxy<br>*(Memory, Compaction, Redaction, Routing)* | `/mcp` Server<br>*(AST `repo_map`, `remember`, `recall`)* | Integration Notes |
+|---|---|---|---|---|
+| **Coding Agents** | OpenCode, Cline, Roo Code, Continue, Aider | **Full Support** | **Full Support** | Dual integration: set LLM `base_url` to `/v1` and register `/mcp` server. |
+| **Desktop IDEs & Apps** | Cursor, Windsurf, Claude Desktop, Claude Code | **Partial / Optional** | **Full Support** | Full MCP tool access; `/v1` proxy supported where custom OpenAI base URLs can be set. |
+| **Python / JS SDKs** | Official `openai` Python/Node SDKs, LangChain, LlamaIndex | **Full Support** | N/A | Drop-in `base_url="http://127.0.0.1:8080/v1"` with arbitrary `api_key`. |
+| **Hosted Web AIs** | Claude.ai Web, ChatGPT Web, Manus | **Unsupported** *(Web UIs cannot route completions through a local `/v1` proxy)* | **Full Support** *(Remote HTTPS MCP)* | Expose `/mcp` via secure HTTPS tunnel with Bearer auth; `/v1` stays blocked by default. |
+
 ---
 
 ## Request Lifecycle
@@ -127,7 +144,7 @@ EdgeMem proxy listens on `http://127.0.0.1:8080/v1` and hosts an MCP endpoint at
 
 ### 4. Connect Your Client
 
-#### OpenCode Configuration (`opencode.json`)
+#### OpenCode (`opencode.json`)
 Point OpenCode directly to the EdgeMem proxy and register the MCP server:
 
 ```json
@@ -144,7 +161,31 @@ Point OpenCode directly to the EdgeMem proxy and register the MCP server:
 }
 ```
 
-#### Standard OpenAI SDK
+#### Cursor / Cline MCP (`~/.cursor/mcp.json` or Cline Settings)
+Register EdgeMem's Streamable HTTP MCP endpoint:
+
+```json
+{
+  "mcpServers": {
+    "edgemem": {
+      "url": "http://127.0.0.1:8080/mcp"
+    }
+  }
+}
+```
+
+#### Claude Desktop (`claude_desktop_config.json`)
+```json
+{
+  "mcpServers": {
+    "edgemem": {
+      "url": "http://127.0.0.1:8080/mcp"
+    }
+  }
+}
+```
+
+#### Standard OpenAI Python SDK
 ```python
 from openai import OpenAI
 
@@ -162,6 +203,40 @@ response = client.chat.completions.create(
 )
 print(response.choices[0].message.content)
 ```
+
+#### Connecting Web AIs via Remote MCP (Claude Web, ChatGPT Web, Manus)
+Hosted web applications cannot route completions through a local `/v1` proxy, but they can connect directly to EdgeMem's MCP tools via a secure HTTPS tunnel:
+
+1. **Activate Bearer Authentication**:
+   Export your secret token in your shell environment (or set `auth_token` in `edgemem.toml`):
+   ```bash
+   export EDGEMEM_AUTH_TOKEN="your-secure-token-here"
+   ```
+
+2. **Configure Allowed Repository Roots (Optional Jail)**:
+   Restrict file access in `edgemem.toml` to prevent traversal outside your designated workspace:
+   ```toml
+   [security]
+   allowed_repo_roots = ["/home/user/projects/my-repo"]
+   ```
+
+3. **Start the EdgeMem Proxy**:
+   ```bash
+   uv run edgemem serve
+   ```
+
+4. **Expose the Port via HTTPS Tunnel**:
+   Using Cloudflare Tunnel (`cloudflared`):
+   ```bash
+   cloudflared tunnel --url http://127.0.0.1:8080
+   ```
+
+5. **Register MCP in the Web Client**:
+   - **Server URL**: `https://<tunnel-subdomain>.trycloudflare.com/mcp`
+   - **HTTP Header**: `Authorization: Bearer your-secure-token-here`
+
+> [!NOTE]
+> By default, `allow_remote_v1 = false` blocks any requests to `/v1/*` carrying tunnel/proxy headers (`x-forwarded-for`, `cf-connecting-ip`, etc.) with HTTP 403 Forbidden. This ensures an HTTPS tunnel opened for `/mcp` cannot inadvertently expose your paid upstream LLM endpoints.
 
 ---
 

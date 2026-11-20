@@ -73,7 +73,20 @@ def _make_app(tmp_path: Path, security_cfg: SecurityConfig | None = None):
     return application
 
 
-def test_backward_compatibility_defaults(tmp_path):
+@pytest.fixture(autouse=True)
+def _clean_security_env(monkeypatch):
+    monkeypatch.delenv("EDGEMEM_AUTH_TOKEN", raising=False)
+
+
+def test_default_config_picks_up_env_token(monkeypatch):
+    monkeypatch.setenv("EDGEMEM_AUTH_TOKEN", "auto-discovered-token")
+    cfg = EdgeMemConfig()
+    assert cfg.security.auth_token_env == "EDGEMEM_AUTH_TOKEN"
+    assert cfg.security.resolve_auth_token() == "auto-discovered-token"
+
+
+def test_backward_compatibility_defaults(tmp_path, monkeypatch):
+    monkeypatch.delenv("EDGEMEM_AUTH_TOKEN", raising=False)
     app = _make_app(tmp_path)
     with TestClient(app, raise_server_exceptions=True) as client:
         health_resp = client.get("/health")
@@ -105,6 +118,9 @@ def test_backward_compatibility_defaults(tmp_path):
             headers={"Content-Type": "application/json", "Accept": "application/json"},
         )
         assert mcp_resp.status_code == 200
+        init_data = mcp_resp.json()
+        assert init_data.get("result", {}).get("serverInfo", {}).get("name") == "EdgeMem"
+        assert init_data.get("result", {}).get("serverInfo", {}).get("version") == "1.0.0"
 
 
 def test_bearer_auth_via_env_var(tmp_path, monkeypatch):

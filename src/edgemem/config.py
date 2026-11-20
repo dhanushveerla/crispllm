@@ -83,7 +83,7 @@ class PrivacyConfig:
 class SecurityConfig:
     """Configuration for pre-release security, authentication, and tunnel isolation."""
 
-    auth_token_env: str = ""
+    auth_token_env: str = "EDGEMEM_AUTH_TOKEN"
     auth_token: str = ""
     allow_remote_v1: bool = False
     allowed_repo_roots: list[str] = field(default_factory=list)

@@ -12,6 +12,8 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 from starlette.applications import Starlette
 
+from edgemem import __version__
+
 if TYPE_CHECKING:
     from edgemem.memory.store import MemoryStore
     from edgemem.proxy.telemetry import TelemetryLogger
@@ -41,7 +43,7 @@ def create_mcp_server(
     config: Any = None,
 ) -> MCPServer:
     """Create the MCPServer instance with EdgeMem tools registered."""
-    mcp = MCPServer("EdgeMem")
+    mcp = MCPServer("EdgeMem", version=__version__)
 
     _telemetry_ref: dict[str, Any] = {"logger": None, "config": config}
     _memory_ref: dict[str, Any] = {"store": memory_store}
