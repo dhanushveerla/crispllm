@@ -25,7 +25,7 @@ from edgemem.slicer.tags import Tag
 
 logger = logging.getLogger("edgemem.slicer.cache")
 
-_DB_VERSION = 1
+_DB_VERSION = 2
 _TABLE = "tags_cache"
 
 
@@ -42,12 +42,18 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     conn.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {_TABLE} (
-            abs_path  TEXT NOT NULL PRIMARY KEY,
-            mtime     REAL NOT NULL,
-            tags_json TEXT NOT NULL
+            abs_path    TEXT NOT NULL PRIMARY KEY,
+            mtime       REAL NOT NULL,
+            tags_json   TEXT NOT NULL,
+            token_count INTEGER NOT NULL DEFAULT 0
         )
         """
     )
+    # Ensure token_count column exists if opened an existing v1 db
+    try:
+        conn.execute(f"ALTER TABLE {_TABLE} ADD COLUMN token_count INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     return conn
 
@@ -99,8 +105,8 @@ class TagCache:
             logger.warning("TagCache: could not open SQLite at %s: %s", self._db_path, exc)
             self._conn = None  # degrade gracefully — always cache miss
 
-    def get(self, abs_path: Path) -> list[Tag] | None:
-        """Return cached tags if the file is unchanged, else None."""
+    def get(self, abs_path: Path) -> tuple[list[Tag], int] | None:
+        """Return (cached_tags, token_count) if the file is unchanged, else None."""
         if self._conn is None:
             return None
         try:
@@ -109,7 +115,7 @@ class TagCache:
             return None
         try:
             row = self._conn.execute(
-                f"SELECT mtime, tags_json FROM {_TABLE} WHERE abs_path = ?",
+                f"SELECT mtime, tags_json, token_count FROM {_TABLE} WHERE abs_path = ?",
                 (str(abs_path),),
             ).fetchone()
         except Exception as exc:
@@ -118,18 +124,24 @@ class TagCache:
 
         if row is None:
             return None
-        cached_mtime, tags_json = row
+        cached_mtime, tags_json, token_count = row
         if abs(cached_mtime - mtime) > 1e-6:
             # File modified — cache miss
             return None
         try:
-            return _json_to_tags(tags_json)
+            tags = _json_to_tags(tags_json)
+            return tags, int(token_count or 0)
         except Exception as exc:
             logger.debug("TagCache.get deserialise error: %s", exc)
             return None
 
-    def put(self, abs_path: Path, tags: list[Tag]) -> None:
-        """Store tags for abs_path keyed by current mtime."""
+    def get_token_count(self, abs_path: Path) -> int | None:
+        """Return cached token count if file is unchanged, else None."""
+        cached = self.get(abs_path)
+        return cached[1] if cached is not None else None
+
+    def put(self, abs_path: Path, tags: list[Tag], token_count: int = 0) -> None:
+        """Store tags and token_count for abs_path keyed by current mtime."""
         if self._conn is None:
             return
         try:
@@ -137,11 +149,14 @@ class TagCache:
             tags_json = _tags_to_json(tags)
             self._conn.execute(
                 f"""
-                INSERT INTO {_TABLE} (abs_path, mtime, tags_json)
-                VALUES (?, ?, ?)
-                ON CONFLICT(abs_path) DO UPDATE SET mtime=excluded.mtime, tags_json=excluded.tags_json
+                INSERT INTO {_TABLE} (abs_path, mtime, tags_json, token_count)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(abs_path) DO UPDATE SET
+                    mtime=excluded.mtime,
+                    tags_json=excluded.tags_json,
+                    token_count=excluded.token_count
                 """,
-                (str(abs_path), mtime, tags_json),
+                (str(abs_path), mtime, tags_json, int(token_count)),
             )
             self._conn.commit()
         except Exception as exc:

@@ -32,6 +32,7 @@ from edgemem.slicer.pagerank import (
     build_symbol_graph,
     compute_pagerank,
     find_matching_files,
+    is_test_file,
     personalise_ranks,
 )
 from edgemem.slicer.tags import Tag, extract_tags, scan_repo_files
@@ -42,12 +43,11 @@ logger = logging.getLogger("edgemem.slicer.repomap")
 # Token counting
 # ---------------------------------------------------------------------------
 
-_ENC: tiktoken.Encoding | None = None
+_ENCODINGS: dict[str, tiktoken.Encoding] = {}
 
 
 def _get_enc(model_name: str = "cl100k_base") -> tiktoken.Encoding:
-    global _ENC
-    if _ENC is None:
+    if model_name not in _ENCODINGS:
         if "TIKTOKEN_CACHE_DIR" not in os.environ:
             from platformdirs import user_cache_dir
             for cand in [
@@ -58,8 +58,8 @@ def _get_enc(model_name: str = "cl100k_base") -> tiktoken.Encoding:
                 if cand.exists():
                     os.environ["TIKTOKEN_CACHE_DIR"] = str(cand)
                     break
-        _ENC = tiktoken.get_encoding(model_name)
-    return _ENC
+        _ENCODINGS[model_name] = tiktoken.get_encoding(model_name)
+    return _ENCODINGS[model_name]
 
 
 def count_tokens(text: str, model_name: str = "cl100k_base") -> int:
@@ -101,6 +101,10 @@ def file_outline(abs_path: Path, rel_path: str | None = None) -> str:
             color=False,
             verbose=False,
             line_number=False,
+            child_context=False,
+            last_line=False,
+            margin=0,
+            show_top_of_file_parent_scope=False,
         )
         # Show all definition lines
         def_lines = []
@@ -154,6 +158,7 @@ class RepoMap:
         self.model_name = model_name
         self._cache = cache or TagCache()
         self._enc = _get_enc(model_name)
+        self._cached_raw_tokens: int | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -184,8 +189,10 @@ class RepoMap:
         if not all_files:
             return ""
 
-        # 2. Extract tags (cached)
+        # 2. Extract tags (cached) & accumulate raw token counts
         all_tags: list[Tag] = []
+        raw_tok_sum = 0
+
         for fpath in all_files:
             try:
                 rel = str(fpath.relative_to(self.repo_path))
@@ -194,11 +201,23 @@ class RepoMap:
 
             cached = self._cache.get(fpath)
             if cached is not None:
-                all_tags.extend(cached)
-            else:
-                tags = extract_tags(fpath, rel)
+                tags, tok_cnt = cached
                 all_tags.extend(tags)
-                self._cache.put(fpath, tags)
+                raw_tok_sum += tok_cnt
+            else:
+                try:
+                    content = fpath.read_text(encoding="utf-8", errors="replace")
+                    tok_cnt = self._count(content)
+                except OSError:
+                    content = ""
+                    tok_cnt = 0
+                tags = extract_tags(fpath, rel, content=content)
+                all_tags.extend(tags)
+                raw_tok_sum += tok_cnt
+                self._cache.put(fpath, tags, token_count=tok_cnt)
+
+        if self._cached_raw_tokens is None:
+            self._cached_raw_tokens = raw_tok_sum
 
         if not all_tags:
             return ""
@@ -213,14 +232,24 @@ class RepoMap:
             focus_files=focus_files,
             mentioned_symbols=mentioned_symbols,
             query_tokens=query_tokens,
+            query=query,
         )
 
+        query_mentions_test = bool(query and "test" in query.lower())
+        focus_has_test = bool(focus_files and any(is_test_file(f) for f in focus_files))
+        penalize_tests = not (query_mentions_test or focus_has_test)
+
         personalization: dict[str, float] | None = None
-        if match_scores:
-            personalization = {
-                node: (10.0 * match_scores[node] if node in match_scores else 1.0)
-                for node in G.nodes()
-            }
+        weights: dict[str, float] = {}
+        for node in G.nodes():
+            w = 1.0
+            if penalize_tests and is_test_file(node):
+                w = 0.15
+            if node in match_scores:
+                w *= (10.0 * match_scores[node])
+            weights[node] = w
+        if any(w != 1.0 for w in weights.values()):
+            personalization = weights
 
         base_ranks = compute_pagerank(G, personalization=personalization)
 
@@ -231,6 +260,7 @@ class RepoMap:
             mentioned_symbols=mentioned_symbols,
             query_tokens=query_tokens,
             tags=all_tags,
+            query=query,
         )
 
         # 5. Build ranked file list; collect def tags per file
@@ -262,7 +292,7 @@ class RepoMap:
         def_tags: list[Tag],
         rank: float,
     ) -> str:
-        """Build a grep-ast formatted chunk for one file."""
+        """Build a dense grep-ast formatted chunk for one file."""
         abs_path = self.repo_path / rel_path
         try:
             content = abs_path.read_text(encoding="utf-8", errors="replace")
@@ -271,7 +301,7 @@ class RepoMap:
 
         def_lines = sorted({t.line for t in def_tags})
         # Cap lines per file to avoid one large file consuming the whole budget
-        def_lines = def_lines[:12]
+        def_lines = def_lines[:10]
 
         try:
             tc = TreeContext(
@@ -280,10 +310,17 @@ class RepoMap:
                 color=False,
                 verbose=False,
                 line_number=False,
+                child_context=False,
+                last_line=False,
+                margin=0,
+                show_top_of_file_parent_scope=False,
             )
             tc.add_lines_of_interest(def_lines)
             tc.add_context()
             formatted = tc.format()
+            flines = formatted.splitlines()
+            if len(flines) > 35:
+                formatted = "\n".join(flines[:35])
         except Exception:
             # Regex fallback
             lines = content.splitlines()
@@ -304,10 +341,14 @@ class RepoMap:
     ) -> str:
         """
         Greedily fill output chunks up to budget (or self.max_tokens).
+        Pre-renders only candidate files from the top of the ranked list,
+        avoiding TreeContext on files that will never fit into the budget.
         """
         effective_budget = budget if budget is not None else self.max_tokens
-        chunks: list[str] = []
-        total = 0
+
+        candidate_chunks: list[tuple[str, int]] = []
+        accumulated = 0
+        max_render_budget = int(effective_budget * 1.5)
 
         for rel_path, rank in ranked_files:
             def_tags = def_tags_by_file.get(rel_path)
@@ -319,14 +360,20 @@ class RepoMap:
                 continue
 
             chunk_toks = self._count(chunk)
+            candidate_chunks.append((chunk, chunk_toks))
+            accumulated += chunk_toks
+            if accumulated >= max_render_budget:
+                break
 
+        chunks: list[str] = []
+        total = 0
+
+        for chunk, chunk_toks in candidate_chunks:
             if total + chunk_toks > effective_budget:
                 if not chunks:
-                    # Must include at least one file — truncate it
                     chunk = self._truncate_to_budget(chunk, effective_budget)
                     chunks.append(chunk)
                 break
-
             chunks.append(chunk)
             total += chunk_toks
 
@@ -346,12 +393,30 @@ class RepoMap:
         return "".join(lines[:lo])
 
     def raw_token_count(self) -> int:
-        """Count tokens across all source files (without slicing)."""
+        """Count tokens across all source files, reading from SQLite cache when warm."""
+        if self._cached_raw_tokens is not None:
+            return self._cached_raw_tokens
+
+        all_files = scan_repo_files(self.repo_path)
         total = 0
-        for fpath in scan_repo_files(self.repo_path):
-            try:
-                text = fpath.read_text(encoding="utf-8", errors="replace")
-                total += self._count(text)
-            except Exception:
-                pass
+        for fpath in all_files:
+            cached = self._cache.get(fpath)
+            if cached is not None:
+                _, tok_cnt = cached
+                total += tok_cnt
+            else:
+                try:
+                    text = fpath.read_text(encoding="utf-8", errors="replace")
+                    tok_cnt = self._count(text)
+                    try:
+                        rel = str(fpath.relative_to(self.repo_path))
+                    except ValueError:
+                        rel = str(fpath)
+                    tags = extract_tags(fpath, rel, content=text)
+                    self._cache.put(fpath, tags, token_count=tok_cnt)
+                    total += tok_cnt
+                except Exception:
+                    pass
+
+        self._cached_raw_tokens = total
         return total

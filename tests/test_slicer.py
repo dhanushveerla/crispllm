@@ -266,6 +266,58 @@ class TestPersonalization:
             "Frontend symbols missing when targeted by query:\n" + query_map
         )
 
+    def test_query_identifier_splitting_boosts_matching_symbols(self, tmp_path: Path):
+        repo = tmp_path / "split_repo"
+        repo.mkdir()
+        (repo / "blueprints.py").write_text(
+            "class Blueprint:\n"
+            "    def __init__(self, name): self.name = name\n"
+            "    def add_url_rule(self, rule, endpoint): pass\n"
+        )
+        (repo / "unrelated.py").write_text(
+            "class UnrelatedWorker:\n"
+            "    def process_background_job(self): pass\n"
+        )
+        rm = RepoMap(repo_path=repo, max_tokens=250)
+        # Query has snake_case and camelCase terms: 'Blueprint routing url_rule'
+        res = rm.get_repo_map(query="Blueprint routing url_rule")
+        assert "blueprints.py" in res
+        assert "add_url_rule" in res or "Blueprint" in res
+
+    def test_production_source_outranks_tests_for_non_test_queries(self, tmp_path: Path):
+        repo = tmp_path / "prod_vs_test_repo"
+        repo.mkdir()
+        src_dir = repo / "src"
+        src_dir.mkdir()
+        (src_dir / "auth.py").write_text(
+            "class AuthenticationService:\n"
+            "    def verify_credentials(self, u, p): return True\n"
+            "    def issue_token(self, u): return 'token'\n"
+        )
+        test_dir = repo / "tests"
+        test_dir.mkdir()
+        (test_dir / "test_auth.py").write_text(
+            "from src.auth import AuthenticationService\n"
+            "def test_verify_credentials():\n"
+            "    svc = AuthenticationService()\n"
+            "    assert svc.verify_credentials('a', 'b')\n"
+        )
+        rm_tight = RepoMap(repo_path=repo, max_tokens=50)
+        # Non-test query targeting auth: production definition wins and fits budget (36 tokens), test file is excluded
+        res_nontest = rm_tight.get_repo_map(query="AuthenticationService verify_credentials")
+        assert "src/auth.py" in res_nontest
+        assert "tests/test_auth.py" not in res_nontest
+
+        # With larger budget where both fit, production file must strictly precede test file
+        rm_wide = RepoMap(repo_path=repo, max_tokens=250)
+        res_wide = rm_wide.get_repo_map(query="AuthenticationService verify_credentials")
+        assert "src/auth.py" in res_wide and "tests/test_auth.py" in res_wide
+        assert res_wide.find("src/auth.py") < res_wide.find("tests/test_auth.py")
+
+        # Query explicitly mentioning 'test' should not penalize test files
+        res_test = rm_wide.get_repo_map(query="test verify credentials test_auth")
+        assert "tests/test_auth.py" in res_test
+
 
 # ---------------------------------------------------------------------------
 # d) Warm SQLite cache matches cold output, runs faster, invalidates on mtime
@@ -311,6 +363,41 @@ class TestTagCacheBehavior:
         # New map reflects updated function
         new_map = rm.get_repo_map(max_tokens=800 if hasattr(rm, "get_repo_map") else None)
         assert "new_cached_function" in new_map or "models/user.py" in new_map
+
+    def test_warm_cache_does_not_reread_for_raw_tokens(
+        self, multi_file_project: Path, tmp_path: Path, monkeypatch
+    ):
+        cache_db = tmp_path / "cache_token_test.db"
+        cache = TagCache(db_path=cache_db)
+
+        # Cold pass: populates SQLite cache with token counts
+        rm1 = RepoMap(repo_path=multi_file_project, cache=cache)
+        raw_cold = rm1.raw_token_count()
+        assert raw_cold > 0
+
+        # Create fresh RepoMap instance sharing the warm cache
+        rm2 = RepoMap(repo_path=multi_file_project, cache=cache)
+
+        # Track any calls to read_text on source files
+        read_calls = []
+        original_read_text = Path.read_text
+
+        def tracking_read_text(self, *args, **kwargs):
+            # Only track reads on source code files inside the repo (skip .gitignore)
+            if self.name != ".gitignore":
+                try:
+                    self.relative_to(multi_file_project)
+                    read_calls.append(str(self))
+                except ValueError:
+                    pass
+            return original_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", tracking_read_text)
+
+        # Warm pass: must sum raw_tokens from SQLite without reading files from disk
+        raw_warm = rm2.raw_token_count()
+        assert raw_warm == raw_cold
+        assert len(read_calls) == 0, f"Warm cache unexpectedly re-read files from disk: {read_calls}"
 
 
 # ---------------------------------------------------------------------------
