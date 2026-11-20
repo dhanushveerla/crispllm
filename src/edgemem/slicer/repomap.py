@@ -17,17 +17,19 @@ The returned string is a compact, ranked repo map that fits within
 """
 from __future__ import annotations
 
+from collections import OrderedDict
+import hashlib
 import logging
 import os
 import re
 import time
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import tiktoken
 from grep_ast import TreeContext
 
-from edgemem.slicer.cache import TagCache
+from edgemem.slicer.cache import OutlineCache, TagCache
 from edgemem.slicer.pagerank import (
     build_symbol_graph,
     compute_pagerank,
@@ -38,6 +40,47 @@ from edgemem.slicer.pagerank import (
 from edgemem.slicer.tags import Tag, extract_tags, scan_repo_files
 
 logger = logging.getLogger("edgemem.slicer.repomap")
+
+_GRAPH_CACHE: OrderedDict[tuple[str, str], tuple[list[Tag], int, Any, dict[str, float]]] = OrderedDict()
+_MAX_GRAPH_ENTRIES = 4
+
+
+def clear_graph_cache() -> None:
+    _GRAPH_CACHE.clear()
+
+
+def render_tree_context(
+    filename: str,
+    code: str,
+    def_lines: Sequence[int],
+    max_lines: int | None = 35,
+) -> str:
+    try:
+        tc = TreeContext(
+            filename=filename,
+            code=code,
+            color=False,
+            verbose=False,
+            line_number=False,
+            child_context=False,
+            last_line=False,
+            margin=0,
+            show_top_of_file_parent_scope=False,
+        )
+        tc.add_lines_of_interest(list(def_lines))
+        tc.add_context()
+        formatted = tc.format()
+        if max_lines is not None:
+            flines = formatted.splitlines()
+            if len(flines) > max_lines:
+                formatted = "\n".join(flines[:max_lines])
+        return formatted
+    except Exception:
+        lines = code.splitlines()
+        matched = [lines[ln] for ln in def_lines if ln < len(lines)]
+        if max_lines is not None and len(matched) > max_lines:
+            matched = matched[:max_lines]
+        return "\n".join(matched)
 
 # ---------------------------------------------------------------------------
 # Token counting
@@ -83,80 +126,72 @@ def extract_query_tokens(query: str) -> list[str]:
 # Single-file outline via grep-ast TreeContext
 # ---------------------------------------------------------------------------
 
-def file_outline(abs_path: Path, rel_path: str | None = None) -> str:
-    """
-    Return an AST skeleton (signatures only) for a single file using grep-ast.
-    Falls back to regex extraction on parse errors.
-    """
+def file_outline(
+    abs_path: Path,
+    rel_path: str | None = None,
+    cache: OutlineCache | None = None,
+) -> str:
     rp = rel_path or str(abs_path)
+    try:
+        st = abs_path.stat()
+    except OSError:
+        return f"# Could not read {rp}\n"
+
     try:
         content = abs_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return f"# Could not read {rp}\n"
 
-    try:
-        tc = TreeContext(
-            filename=rp,
-            code=content,
-            color=False,
-            verbose=False,
-            line_number=False,
-            child_context=False,
-            last_line=False,
-            margin=0,
-            show_top_of_file_parent_scope=False,
-        )
-        # Show all definition lines
-        def_lines = []
-        for i, line in enumerate(content.splitlines()):
-            stripped = line.strip()
-            if stripped.startswith(("def ", "async def ", "class ", "fn ", "func ",
-                                    "function ", "pub fn", "pub async", "type ",
-                                    "interface ", "impl ", "struct ", "enum ")):
-                def_lines.append(i)
-        if def_lines:
-            tc.add_lines_of_interest(def_lines)
-            tc.add_context()
-            return tc.format()
-        # Empty file or no defs — return first 20 lines
+    def_lines = []
+    for i, line in enumerate(content.splitlines()):
+        stripped = line.strip()
+        if stripped.startswith((
+            "def ", "async def ", "class ", "fn ", "func ",
+            "function ", "pub fn", "pub async", "type ",
+            "interface ", "impl ", "struct ", "enum ",
+        )):
+            def_lines.append(i)
+
+    if not def_lines:
         return "\n".join(content.splitlines()[:20])
-    except Exception:
-        # Regex fallback
+
+    lines_key = f"lines:{','.join(map(str, def_lines))};max_lines=none"
+    if cache is not None:
+        cached = cache.get(rp, st.st_mtime_ns, st.st_size, lines_key)
+        if cached is not None:
+            return cached[0]
+
+    formatted = render_tree_context(rp, content, def_lines, max_lines=None)
+    if not formatted.strip():
         lines = []
         for line in content.splitlines():
             stripped = line.strip()
             if stripped.startswith(("def ", "async def ", "class ")):
                 lines.append(line.rstrip())
-        return "\n".join(lines[:40]) if lines else f"# {rp}: (no definitions found)\n"
+        formatted = "\n".join(lines[:40]) if lines else f"# {rp}: (no definitions found)\n"
 
+    if cache is not None:
+        tok_cnt = count_tokens(formatted)
+        cache.put(rp, st.st_mtime_ns, st.st_size, lines_key, formatted, tok_cnt)
 
-# ---------------------------------------------------------------------------
-# Main RepoMap class
-# ---------------------------------------------------------------------------
+    return formatted
+
 
 class RepoMap:
-    """
-    Builds a token-budgeted repo map using PageRank over the symbol graph.
-
-    Parameters
-    ----------
-    repo_path:   Root of the repository to map.
-    max_tokens:  Hard upper bound on output tokens (tiktoken cl100k_base).
-    model_name:  tiktoken encoding name (default: cl100k_base).
-    cache:       Optional TagCache instance.  Creates a default one if None.
-    """
-
     def __init__(
         self,
         repo_path: str | Path,
         max_tokens: int = 1024,
         model_name: str = "cl100k_base",
         cache: TagCache | None = None,
+        outline_cache: OutlineCache | None = None,
+        max_outline_entries: int = 256,
     ) -> None:
         self.repo_path = Path(repo_path).resolve()
         self.max_tokens = max_tokens
         self.model_name = model_name
-        self._cache = cache or TagCache()
+        self._cache = cache or TagCache(max_outline_entries=max_outline_entries)
+        self.outline_cache = outline_cache or self._cache.outline_cache
         self._enc = _get_enc(model_name)
         self._cached_raw_tokens: int | None = None
 
@@ -171,50 +206,70 @@ class RepoMap:
         query: str = "",
         max_tokens: int | None = None,
     ) -> str:
-        """
-        Return a compact repo map string within `max_tokens` (or `self.max_tokens`).
-
-        Parameters
-        ----------
-        focus_files:        Relative paths to files that should rank highest.
-        mentioned_symbols:  Symbol names that should boost their defining files.
-        query:              Natural language query; identifier tokens extracted
-                            and used to boost matching definitions.
-        max_tokens:         Optional override for the token budget.
-        """
         t0 = time.perf_counter()
 
-        # 1. Scan files
         all_files = scan_repo_files(self.repo_path)
         if not all_files:
             return ""
 
-        # 2. Extract tags (cached) & accumulate raw token counts
-        all_tags: list[Tag] = []
-        raw_tok_sum = 0
-
+        file_stats: list[tuple[str, int, int]] = []
         for fpath in all_files:
             try:
                 rel = str(fpath.relative_to(self.repo_path))
             except ValueError:
                 rel = str(fpath)
+            try:
+                st = fpath.stat()
+                file_stats.append((rel, st.st_mtime_ns, st.st_size))
+            except OSError:
+                file_stats.append((rel, 0, 0))
 
-            cached = self._cache.get(fpath)
-            if cached is not None:
-                tags, tok_cnt = cached
-                all_tags.extend(tags)
-                raw_tok_sum += tok_cnt
-            else:
+        file_stats.sort()
+        hasher = hashlib.sha256()
+        for item in file_stats:
+            hasher.update(f"{item[0]}:{item[1]}:{item[2]};".encode("utf-8"))
+        repo_fingerprint = hasher.hexdigest()
+        graph_key = (str(self.repo_path), repo_fingerprint)
+
+        if graph_key in _GRAPH_CACHE:
+            all_tags, raw_tok_sum, G, base_ranks = _GRAPH_CACHE[graph_key]
+            _GRAPH_CACHE.move_to_end(graph_key)
+        else:
+            all_tags: list[Tag] = []
+            raw_tok_sum = 0
+
+            for fpath in all_files:
                 try:
-                    content = fpath.read_text(encoding="utf-8", errors="replace")
-                    tok_cnt = self._count(content)
-                except OSError:
-                    content = ""
-                    tok_cnt = 0
-                tags = extract_tags(fpath, rel, content=content)
-                all_tags.extend(tags)
-                raw_tok_sum += tok_cnt
-                self._cache.put(fpath, tags, token_count=tok_cnt)
+                    rel = str(fpath.relative_to(self.repo_path))
+                except ValueError:
+                    rel = str(fpath)
+
+                cached = self._cache.get(fpath)
+                if cached is not None:
+                    tags, tok_cnt = cached
+                    all_tags.extend(tags)
+                    raw_tok_sum += tok_cnt
+                else:
+                    try:
+                        content = fpath.read_text(encoding="utf-8", errors="replace")
+                        tok_cnt = self._count(content)
+                    except OSError:
+                        content = ""
+                        tok_cnt = 0
+                    tags = extract_tags(fpath, rel, content=content)
+                    all_tags.extend(tags)
+                    raw_tok_sum += tok_cnt
+                    self._cache.put(fpath, tags, token_count=tok_cnt)
+
+            if not all_tags:
+                return ""
+
+            G = build_symbol_graph(all_tags)
+            base_ranks = compute_pagerank(G)
+
+            if len(_GRAPH_CACHE) >= _MAX_GRAPH_ENTRIES:
+                _GRAPH_CACHE.popitem(last=False)
+            _GRAPH_CACHE[graph_key] = (all_tags, raw_tok_sum, G, base_ranks)
 
         if self._cached_raw_tokens is None:
             self._cached_raw_tokens = raw_tok_sum
@@ -222,8 +277,6 @@ class RepoMap:
         if not all_tags:
             return ""
 
-        # 3. Build graph + PageRank
-        G = build_symbol_graph(all_tags)
         query_tokens = extract_query_tokens(query) if query else []
 
         match_scores = find_matching_files(
@@ -251,11 +304,13 @@ class RepoMap:
         if any(w != 1.0 for w in weights.values()):
             personalization = weights
 
-        base_ranks = compute_pagerank(G, personalization=personalization)
+        if personalization is not None:
+            computed_ranks = compute_pagerank(G, personalization=personalization)
+        else:
+            computed_ranks = base_ranks
 
-        # 4. Post-hoc boost via personalise_ranks (multiplicative)
         ranks = personalise_ranks(
-            base_ranks,
+            computed_ranks,
             focus_files=focus_files,
             mentioned_symbols=mentioned_symbols,
             query_tokens=query_tokens,
@@ -263,7 +318,6 @@ class RepoMap:
             query=query,
         )
 
-        # 5. Build ranked file list; collect def tags per file
         def_tags_by_file: dict[str, list[Tag]] = {}
         for tag in all_tags:
             if tag.kind == "def":
@@ -271,7 +325,6 @@ class RepoMap:
 
         ranked_files = sorted(ranks.items(), key=lambda x: x[1], reverse=True)
 
-        # 6. Binary-search + greedy fill within max_tokens
         effective_budget = max_tokens if max_tokens is not None else self.max_tokens
         output = self._fill_to_budget(ranked_files, def_tags_by_file, budget=effective_budget)
 
@@ -282,51 +335,36 @@ class RepoMap:
         )
         return output
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _chunk_for_file(
         self,
         rel_path: str,
         def_tags: list[Tag],
         rank: float,
     ) -> str:
-        """Build a dense grep-ast formatted chunk for one file."""
         abs_path = self.repo_path / rel_path
+        try:
+            st = abs_path.stat()
+        except OSError:
+            return ""
+
+        def_lines = sorted({t.line for t in def_tags})[:10]
+        lines_key = f"lines:{','.join(map(str, def_lines))};max_lines=35"
+
+        cached = self.outline_cache.get(rel_path, st.st_mtime_ns, st.st_size, lines_key)
+        if cached is not None:
+            formatted, _ = cached
+            return f"\n{rel_path}:\n{formatted}\n"
+
         try:
             content = abs_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return ""
 
-        def_lines = sorted({t.line for t in def_tags})
-        # Cap lines per file to avoid one large file consuming the whole budget
-        def_lines = def_lines[:10]
-
-        try:
-            tc = TreeContext(
-                filename=rel_path,
-                code=content,
-                color=False,
-                verbose=False,
-                line_number=False,
-                child_context=False,
-                last_line=False,
-                margin=0,
-                show_top_of_file_parent_scope=False,
-            )
-            tc.add_lines_of_interest(def_lines)
-            tc.add_context()
-            formatted = tc.format()
-            flines = formatted.splitlines()
-            if len(flines) > 35:
-                formatted = "\n".join(flines[:35])
-        except Exception:
-            # Regex fallback
-            lines = content.splitlines()
-            formatted = "\n".join(
-                lines[ln] for ln in def_lines if ln < len(lines)
-            )
+        formatted = render_tree_context(rel_path, content, def_lines, max_lines=35)
+        tok_cnt = self._count(formatted)
+        self.outline_cache.put(
+            rel_path, st.st_mtime_ns, st.st_size, lines_key, formatted, tok_cnt
+        )
 
         return f"\n{rel_path}:\n{formatted}\n"
 

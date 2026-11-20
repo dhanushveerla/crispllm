@@ -19,6 +19,6 @@ from __future__ import annotations
 
 from edgemem.slicer.repomap import RepoMap
 from edgemem.slicer.tags import Tag, extract_tags
-from edgemem.slicer.cache import TagCache
+from edgemem.slicer.cache import OutlineCache, TagCache
 
-__all__ = ["RepoMap", "Tag", "extract_tags", "TagCache"]
+__all__ = ["RepoMap", "Tag", "extract_tags", "TagCache", "OutlineCache"]

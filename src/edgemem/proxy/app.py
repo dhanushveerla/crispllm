@@ -103,6 +103,30 @@ def _prepare_payload_for_target(
     return upstream, session, headers
 
 
+def _is_empty_buffering_choice(choice: Any) -> bool:
+    if not isinstance(choice, dict):
+        return False
+    if choice.get("finish_reason") is not None:
+        return False
+    if choice.get("role"):
+        return False
+    if choice.get("tool_calls"):
+        return False
+    delta = choice.get("delta")
+    if not isinstance(delta, dict):
+        return False
+    if delta.get("role"):
+        return False
+    if delta.get("tool_calls"):
+        return False
+    if delta.get("content") != "":
+        return False
+    for k, v in delta.items():
+        if k != "content" and v:
+            return False
+    return True
+
+
 async def _restoring_stream_wrapper(
     raw_stream: AsyncIterator[str],
     session: RedactionSession,
@@ -215,6 +239,14 @@ async def _restoring_stream_wrapper(
                                         delta["content"] += flushed
                                     else:
                                         delta["content"] = flushed
+
+            if (
+                chunk_data.get("usage") is None
+                and isinstance(choices, list)
+                and len(choices) > 0
+                and all(_is_empty_buffering_choice(c) for c in choices)
+            ):
+                continue
 
             yield f"data: {json.dumps(chunk_data)}\n\n"
         else:

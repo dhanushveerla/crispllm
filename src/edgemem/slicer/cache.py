@@ -13,6 +13,7 @@ Cache miss: row absent, or mtime changed (file modified)
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 import json
 import logging
 import sqlite3
@@ -49,11 +50,24 @@ def _connect(db_path: Path) -> sqlite3.Connection:
         )
         """
     )
-    # Ensure token_count column exists if opened an existing v1 db
     try:
         conn.execute(f"ALTER TABLE {_TABLE} ADD COLUMN token_count INTEGER NOT NULL DEFAULT 0")
     except sqlite3.OperationalError:
         pass
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS outline_cache (
+            rel_path    TEXT NOT NULL,
+            mtime_ns    INTEGER NOT NULL,
+            size        INTEGER NOT NULL,
+            lines_key   TEXT NOT NULL,
+            rendered    TEXT NOT NULL,
+            token_count INTEGER NOT NULL,
+            PRIMARY KEY (rel_path, mtime_ns, size, lines_key)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_outline_cache_rel_path ON outline_cache(rel_path)")
     conn.commit()
     return conn
 
@@ -89,6 +103,138 @@ def _json_to_tags(raw: str) -> list[Tag]:
     ]
 
 
+class OutlineCache:
+    def __init__(
+        self,
+        conn: sqlite3.Connection | None = None,
+        db_path: Path | None = None,
+        max_entries: int = 256,
+    ) -> None:
+        self._max_entries = max_entries
+        self._lru: OrderedDict[tuple[str, int, int, str], tuple[str, int]] = OrderedDict()
+        self._db_path = db_path
+        self._conn = conn
+        if self._conn is None and self._db_path is not None:
+            try:
+                self._conn = _connect(self._db_path)
+            except Exception as exc:
+                logger.warning("OutlineCache: could not open SQLite at %s: %s", self._db_path, exc)
+                self._conn = None
+
+    def get(
+        self,
+        rel_path: str,
+        mtime_ns: int,
+        size: int,
+        lines_key: str,
+    ) -> tuple[str, int] | None:
+        key = (rel_path, mtime_ns, size, lines_key)
+        if key in self._lru:
+            self._lru.move_to_end(key)
+            return self._lru[key]
+
+        if self._conn is not None:
+            try:
+                row = self._conn.execute(
+                    "SELECT rendered, token_count FROM outline_cache WHERE rel_path = ? AND mtime_ns = ? AND size = ? AND lines_key = ?",
+                    (rel_path, mtime_ns, size, lines_key),
+                ).fetchone()
+                if row is not None:
+                    rendered, token_count = row[0], int(row[1])
+                    if len(self._lru) >= self._max_entries and key not in self._lru:
+                        self._lru.popitem(last=False)
+                    self._lru[key] = (rendered, token_count)
+                    return rendered, token_count
+
+                self._conn.execute(
+                    "DELETE FROM outline_cache WHERE rel_path = ? AND (mtime_ns != ? OR size != ?)",
+                    (rel_path, mtime_ns, size),
+                )
+                self._conn.commit()
+                stale = [
+                    k for k in self._lru
+                    if k[0] == rel_path and (k[1] != mtime_ns or k[2] != size)
+                ]
+                for k in stale:
+                    del self._lru[k]
+            except Exception as exc:
+                logger.debug("OutlineCache.get error: %s", exc)
+        return None
+
+    def put(
+        self,
+        rel_path: str,
+        mtime_ns: int,
+        size: int,
+        lines_key: str,
+        rendered: str,
+        token_count: int,
+    ) -> None:
+        key = (rel_path, mtime_ns, size, lines_key)
+        if self._conn is not None:
+            try:
+                self._conn.execute(
+                    "DELETE FROM outline_cache WHERE rel_path = ? AND (mtime_ns != ? OR size != ?)",
+                    (rel_path, mtime_ns, size),
+                )
+                self._conn.execute(
+                    """
+                    INSERT INTO outline_cache (rel_path, mtime_ns, size, lines_key, rendered, token_count)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(rel_path, mtime_ns, size, lines_key) DO UPDATE SET
+                        rendered=excluded.rendered,
+                        token_count=excluded.token_count
+                    """,
+                    (rel_path, mtime_ns, size, lines_key, rendered, int(token_count)),
+                )
+                self._conn.commit()
+            except Exception as exc:
+                logger.debug("OutlineCache.put error: %s", exc)
+
+        stale = [
+            k for k in self._lru
+            if k[0] == rel_path and (k[1] != mtime_ns or k[2] != size)
+        ]
+        for k in stale:
+            del self._lru[k]
+
+        if key in self._lru:
+            self._lru.move_to_end(key)
+        else:
+            if len(self._lru) >= self._max_entries:
+                self._lru.popitem(last=False)
+            self._lru[key] = (rendered, int(token_count))
+
+    def invalidate(self, rel_path: str) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.execute(
+                    "DELETE FROM outline_cache WHERE rel_path = ? OR rel_path = ? OR rel_path LIKE ?",
+                    (rel_path, Path(rel_path).name, f"%/{rel_path}"),
+                )
+                self._conn.commit()
+            except Exception as exc:
+                logger.debug("OutlineCache.invalidate error: %s", exc)
+        keys_to_remove = [
+            k for k in self._lru
+            if k[0] == rel_path or k[0].endswith(rel_path) or rel_path.endswith(k[0])
+        ]
+        for k in keys_to_remove:
+            del self._lru[k]
+
+    def clear(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.execute("DELETE FROM outline_cache")
+                self._conn.commit()
+            except Exception as exc:
+                logger.debug("OutlineCache.clear error: %s", exc)
+        self._lru.clear()
+
+    def __len__(self) -> int:
+        return len(self._lru)
+
+
 class TagCache:
     """
     Persistent mtime-keyed SQLite cache for extracted tags.
@@ -97,13 +243,32 @@ class TagCache:
     Not designed for concurrent multi-process write access.
     """
 
-    def __init__(self, db_path: Path | None = None) -> None:
+    def __init__(self, db_path: Path | None = None, max_outline_entries: int = 256) -> None:
         self._db_path = db_path or _db_path()
         try:
             self._conn = _connect(self._db_path)
         except Exception as exc:
             logger.warning("TagCache: could not open SQLite at %s: %s", self._db_path, exc)
-            self._conn = None  # degrade gracefully — always cache miss
+            self._conn = None
+        self.outline_cache = OutlineCache(conn=self._conn, max_entries=max_outline_entries)
+
+    def get_outline(
+        self, rel_path: str, mtime_ns: int, size: int, lines_key: str
+    ) -> tuple[str, int] | None:
+        return self.outline_cache.get(rel_path, mtime_ns, size, lines_key)
+
+    def put_outline(
+        self,
+        rel_path: str,
+        mtime_ns: int,
+        size: int,
+        lines_key: str,
+        rendered: str,
+        token_count: int,
+    ) -> None:
+        self.outline_cache.put(
+            rel_path, mtime_ns, size, lines_key, rendered, token_count
+        )
 
     def get(self, abs_path: Path) -> tuple[list[Tag], int] | None:
         """Return (cached_tags, token_count) if the file is unchanged, else None."""
@@ -163,7 +328,6 @@ class TagCache:
             logger.debug("TagCache.put error: %s", exc)
 
     def invalidate(self, abs_path: Path) -> None:
-        """Remove a specific entry from the cache."""
         if self._conn is None:
             return
         try:
@@ -174,9 +338,10 @@ class TagCache:
             self._conn.commit()
         except Exception as exc:
             logger.debug("TagCache.invalidate error: %s", exc)
+        self.outline_cache.invalidate(str(abs_path))
+        self.outline_cache.invalidate(abs_path.name)
 
     def clear(self) -> None:
-        """Drop all cached entries."""
         if self._conn is None:
             return
         try:
@@ -184,6 +349,7 @@ class TagCache:
             self._conn.commit()
         except Exception as exc:
             logger.debug("TagCache.clear error: %s", exc)
+        self.outline_cache.clear()
 
     def close(self) -> None:
         if self._conn is not None:
@@ -192,6 +358,7 @@ class TagCache:
             except Exception:
                 pass
             self._conn = None
+            self.outline_cache._conn = None
 
     def __enter__(self) -> "TagCache":
         return self

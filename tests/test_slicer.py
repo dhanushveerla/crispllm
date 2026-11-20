@@ -541,3 +541,133 @@ class TestScanningAndMultiLanguage:
         c_tags = extract_tags(tmp_path / "helper.c", "helper.c")
         c_defs = {t.name for t in c_tags if t.kind == "def"}
         assert "run_helper" in c_defs
+
+
+class TestOutlineCacheBehavior:
+    def test_second_slice_hits_in_memory_outline_cache(
+        self, multi_file_project: Path, tmp_path: Path, monkeypatch
+    ):
+        from edgemem.slicer import repomap
+        from edgemem.slicer.repomap import clear_graph_cache
+
+        clear_graph_cache()
+        cache_db = tmp_path / "outline_test.db"
+        cache = TagCache(db_path=cache_db)
+        rm = RepoMap(repo_path=multi_file_project, max_tokens=1000, cache=cache)
+
+        out1 = rm.get_repo_map()
+        assert out1
+
+        calls = 0
+        orig_render = repomap.render_tree_context
+
+        def spy_render(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return orig_render(*args, **kwargs)
+
+        monkeypatch.setattr(repomap, "render_tree_context", spy_render)
+
+        out2 = rm.get_repo_map()
+        assert out2 == out1
+        assert calls == 0
+        cache.close()
+
+    def test_warm_sqlite_hits_persisted_outline_cache(
+        self, multi_file_project: Path, tmp_path: Path, monkeypatch
+    ):
+        from edgemem.slicer import repomap
+        from edgemem.slicer.repomap import clear_graph_cache
+
+        clear_graph_cache()
+        cache_db = tmp_path / "persisted_outline.db"
+
+        cache1 = TagCache(db_path=cache_db)
+        rm1 = RepoMap(repo_path=multi_file_project, max_tokens=1000, cache=cache1)
+        out1 = rm1.get_repo_map()
+        assert out1
+        cache1.close()
+
+        clear_graph_cache()
+
+        cache2 = TagCache(db_path=cache_db)
+        rm2 = RepoMap(repo_path=multi_file_project, max_tokens=1000, cache=cache2)
+        assert len(cache2.outline_cache) == 0
+
+        calls = 0
+        orig_render = repomap.render_tree_context
+
+        def spy_render(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return orig_render(*args, **kwargs)
+
+        monkeypatch.setattr(repomap, "render_tree_context", spy_render)
+
+        out2 = rm2.get_repo_map()
+        assert out2 == out1
+        assert calls == 0
+        assert len(cache2.outline_cache) > 0
+        cache2.close()
+
+    def test_file_edit_invalidates_caches_and_returns_updated_symbols(
+        self, multi_file_project: Path, tmp_path: Path
+    ):
+        from edgemem.slicer.repomap import clear_graph_cache
+
+        clear_graph_cache()
+        cache_db = tmp_path / "invalidation_test.db"
+        cache = TagCache(db_path=cache_db)
+        rm = RepoMap(repo_path=multi_file_project, max_tokens=1000, cache=cache)
+
+        out1 = rm.get_repo_map()
+        assert "UserRecord" in out1
+
+        target_file = multi_file_project / "models" / "user.py"
+        old_st = target_file.stat()
+        old_mtime_ns = old_st.st_mtime_ns
+        old_size = old_st.st_size
+
+        time.sleep(0.02)
+        target_file.write_text(
+            target_file.read_text() + "\ndef unique_phase4a_function(): pass\n"
+        )
+        new_mtime = target_file.stat().st_mtime + 2.0
+        os.utime(target_file, (new_mtime, new_mtime))
+        new_st = target_file.stat()
+
+        clear_graph_cache()
+        out2 = rm.get_repo_map()
+        assert "unique_phase4a_function" in out2
+
+        rows = cache._conn.execute(
+            "SELECT mtime_ns, size FROM outline_cache WHERE rel_path = ?",
+            ("models/user.py",),
+        ).fetchall()
+        assert len(rows) > 0
+        for r_mtime, r_size in rows:
+            assert r_mtime == new_st.st_mtime_ns
+            assert r_size == new_st.st_size
+            assert r_mtime != old_mtime_ns or r_size != old_size
+
+        stale_in_mem = [
+            k for k in cache.outline_cache._lru
+            if k[0] == "models/user.py" and (k[1] != new_st.st_mtime_ns or k[2] != new_st.st_size)
+        ]
+        assert len(stale_in_mem) == 0
+        cache.close()
+
+    def test_in_memory_lru_cache_never_exceeds_max_entries(self, tmp_path: Path):
+        from edgemem.slicer.cache import OutlineCache
+
+        cache_db = tmp_path / "lru_limit_test.db"
+        cache = OutlineCache(db_path=cache_db, max_entries=3)
+
+        for i in range(10):
+            cache.put(f"file_{i}.py", 1000 + i, 50 + i, "k0", f"render_{i}", 10)
+            assert len(cache) <= 3
+
+        assert len(cache) == 3
+        assert ("file_0.py", 1000, 50, "k0") not in cache._lru
+        assert ("file_9.py", 1009, 59, "k0") in cache._lru
+

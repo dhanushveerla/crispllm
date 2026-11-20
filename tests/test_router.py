@@ -464,3 +464,89 @@ def test_localhost_skip(tmp_path) -> None:
         req_json = json.dumps(local_req)
         assert secret in req_json
         assert "__EDGEMEM_" not in req_json
+
+
+def test_streaming_sse_suppress_empty_buffering_deltas(tmp_path) -> None:
+    client, transport, cfg = _make_test_setup(
+        tmp_path,
+        cloud_enabled=True,
+        strategy="cloud_only",
+    )
+    with client:
+        secret = "sk-proj-supersecrettoken12345678"
+        transport.custom_stream_lines = [
+            f'data: {json.dumps({"id": "chatcmpl-test", "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})}\n\n',
+            f'data: {json.dumps({"id": "chatcmpl-test", "choices": [{"index": 0, "delta": {"content": "Your secret is "}, "finish_reason": None}]})}\n\n',
+            f'data: {json.dumps({"id": "chatcmpl-test", "choices": [{"index": 0, "delta": {"content": "__EDGE"}, "finish_reason": None}]})}\n\n',
+            f'data: {json.dumps({"id": "chatcmpl-test", "choices": [{"index": 0, "delta": {"content": "MEM_SE"}, "finish_reason": None}]})}\n\n',
+            f'data: {json.dumps({"id": "chatcmpl-test", "choices": [{"index": 0, "delta": {"content": "CRET_1"}, "finish_reason": None}]})}\n\n',
+            f'data: {json.dumps({"id": "chatcmpl-test", "choices": [{"index": 0, "delta": {"content": "__ verified."}, "finish_reason": None}]})}\n\n',
+            f'data: {json.dumps({"id": "chatcmpl-test", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})}\n\n',
+            f'data: {json.dumps({"id": "chatcmpl-test", "choices": [], "usage": {"completion_tokens": 10, "prompt_tokens": 5}})}\n\n',
+            "data: [DONE]\n\n",
+        ]
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "stream": True,
+                "messages": [
+                    {"role": "user", "content": f"Secret is {secret}"}
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.headers["X-EdgeMem-Route"] == "cloud"
+        assert resp.headers["X-EdgeMem-Redacted"] == "1"
+
+        raw_chunks = [
+            line for line in transport.custom_stream_lines
+            if line.startswith("data: ") and line.strip() != "data: [DONE]"
+        ]
+        raw_count = len(raw_chunks)
+
+        blocks = resp.text.split("\n\n")
+        emitted_chunks = []
+        content_deltas = []
+        saw_role = False
+        saw_finish = False
+        saw_usage = False
+        saw_done = False
+
+        for block in blocks:
+            if not block.strip():
+                continue
+            if block == "data: [DONE]":
+                saw_done = True
+                continue
+            assert block.startswith("data: ")
+            chunk = json.loads(block[6:])
+            emitted_chunks.append(chunk)
+
+            if chunk.get("usage") is not None:
+                saw_usage = True
+
+            choices = chunk.get("choices", [])
+            if choices:
+                c = choices[0]
+                delta = c.get("delta", {})
+                if delta.get("role") == "assistant":
+                    saw_role = True
+                if c.get("finish_reason") == "stop":
+                    saw_finish = True
+                if "content" in delta:
+                    content_val = delta["content"]
+                    assert not (content_val == "" and c.get("finish_reason") is None), (
+                        f"Unsuppressed empty content chunk detected: {chunk}"
+                    )
+                    if content_val:
+                        content_deltas.append(content_val)
+
+        assert saw_done
+        assert saw_role
+        assert saw_finish
+        assert saw_usage
+        assert len(emitted_chunks) < raw_count
+        reconstructed = "".join(content_deltas)
+        assert reconstructed == f"Your secret is {secret} verified."
+        assert "__EDGEMEM_" not in reconstructed
