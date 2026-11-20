@@ -322,3 +322,48 @@ class TestStressTasksSuite:
         assert not passed, (
             f"Stress task {task['id']!r}: empty/broken solution unexpectedly PASSED."
         )
+
+
+# ---------------------------------------------------------------------------
+# 7. Deterministic sampling payload verification
+# ---------------------------------------------------------------------------
+
+class TestDeterministicSampling:
+    def test_default_payload_temperature_and_seed(self):
+        from bench.run_bench import build_chat_payload, build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["--base-url", "http://localhost:8080/v1", "--model", "test-model"])
+        assert args.temperature == 0.0
+        assert args.seed is None
+
+        payload = build_chat_payload(
+            model="test-model",
+            messages=[{"role": "user", "content": "hello"}],
+            temperature=args.temperature,
+            seed=args.seed,
+        )
+        assert payload["temperature"] == 0.0
+        assert "seed" not in payload
+
+    def test_custom_payload_temperature_and_seed(self):
+        from bench.run_bench import build_chat_payload, build_parser
+
+        parser = build_parser()
+        args = parser.parse_args([
+            "--base-url", "http://localhost:8080/v1",
+            "--model", "test-model",
+            "--temperature", "0.7",
+            "--seed", "42",
+        ])
+        assert args.temperature == 0.7
+        assert args.seed == 42
+
+        payload = build_chat_payload(
+            model="test-model",
+            messages=[{"role": "user", "content": "hello"}],
+            temperature=args.temperature,
+            seed=args.seed,
+        )
+        assert payload["temperature"] == 0.7
+        assert payload["seed"] == 42

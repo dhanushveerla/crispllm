@@ -82,6 +82,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "Use for low-RPM providers like Gemini free tier.")
     p.add_argument("--max-retries", type=int, default=4,
                    help="Max retry attempts on HTTP 429/503 (default 4).")
+    p.add_argument("--temperature", type=float, default=0.0,
+                   help="Sampling temperature (default: 0.0)")
+    p.add_argument("--seed", type=int, default=None,
+                   help="Random seed for sampling (default: None)")
     return p
 
 
@@ -205,6 +209,28 @@ def extract_all_code_blocks(text: str) -> dict[str, str]:
     return result
 
 
+def build_chat_payload(
+    model: str,
+    messages: list[dict],
+    temperature: float = 0.0,
+    seed: int | None = None,
+    extra_body: dict | None = None,
+    stream: bool = False,
+) -> dict:
+    """Build OpenAI chat completion JSON payload with pinned sampling parameters."""
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": stream,
+        "temperature": temperature,
+    }
+    if extra_body:
+        payload.update(extra_body)
+    if seed is not None:
+        payload["seed"] = seed
+    return payload
+
+
 def run_task(
     task: dict,
     base_url: str,
@@ -214,6 +240,8 @@ def run_task(
     timeout_llm: int,
     timeout_task: int,
     max_retries: int = 4,
+    temperature: float = 0.0,
+    seed: int | None = None,
 ) -> dict:
     """
     Execute a single benchmark task.
@@ -261,12 +289,14 @@ def run_task(
         final_text: str = ""
 
         try:
-            payload = {
-                "model": model,
-                "messages": messages,
-                "stream": False,
-                **extra_body,
-            }
+            payload = build_chat_payload(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                seed=seed,
+                extra_body=extra_body,
+                stream=False,
+            )
             resp = _http_post_json(
                 f"{base_url.rstrip('/')}/chat/completions",
                 payload,
@@ -426,7 +456,9 @@ def compute_metrics(results: list[dict]) -> dict:
 
 def build_markdown_report(label: str, model: str, base_url: str,
                            metrics: dict, results: list[dict],
-                           rss_mb: float | None) -> str:
+                           rss_mb: float | None,
+                           temperature: float = 0.0,
+                           seed: int | None = None) -> str:
     p = metrics["pass_at_1"]
     t = metrics["tokens"]
     l = metrics["latency"]
@@ -440,6 +472,11 @@ def build_markdown_report(label: str, model: str, base_url: str,
         f"| Label | `{label}` |",
         f"| Model | `{model}` |",
         f"| Endpoint | `{base_url}` |",
+        f"| Temperature | `{temperature}` |",
+    ]
+    if seed is not None:
+        lines.append(f"| Seed | `{seed}` |")
+    lines.extend([
         f"| Tasks run | {c['total']} |",
         f"| **Pass@1 (overall)** | **{p['overall']:.1%}** ({c['passed']}/{c['total']}) |",
         f"| Pass@1 exact_fact | {p['exact_fact']:.1%} ({c['exact_fact_passed']}/{c['exact_fact_total']}) |" if p['exact_fact'] is not None else "| Pass@1 exact_fact | — |",
@@ -458,7 +495,7 @@ def build_markdown_report(label: str, model: str, base_url: str,
         "",
         "| Task ID | Category | Pass | Prompt tok | Completion tok | Wall (ms) | Error |",
         "|---|---|---|---|---|---|---|",
-    ]
+    ])
     for r in results:
         status = "✅" if r["passed"] else "❌"
         err_snippet = (r.get("error") or "")[:60].replace("\n", " ")
@@ -536,6 +573,8 @@ def main() -> None:
             timeout_llm=args.timeout_llm,
             timeout_task=args.timeout_task,
             max_retries=args.max_retries,
+            temperature=args.temperature,
+            seed=args.seed,
         )
         elapsed = time.perf_counter() - t0
         status_icon = "✅" if result["passed"] else "❌"
@@ -582,10 +621,13 @@ def main() -> None:
         "label": args.label,
         "model": args.model,
         "base_url": args.base_url,
+        "temperature": args.temperature,
         "metrics": metrics,
         "rss_mb": rss_mb,
         "results": results,
     }
+    if args.seed is not None:
+        output_data["seed"] = args.seed
     json_path = output_dir / f"{args.label}_results.json"
     with open(json_path, "w") as f:
         json.dump(output_data, f, indent=2)
@@ -599,6 +641,8 @@ def main() -> None:
         metrics=metrics,
         results=results,
         rss_mb=rss_mb,
+        temperature=args.temperature,
+        seed=args.seed,
     )
     md_path = output_dir / f"{args.label}_report.md"
     with open(md_path, "w") as f:
