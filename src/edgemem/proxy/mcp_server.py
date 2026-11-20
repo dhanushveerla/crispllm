@@ -9,24 +9,47 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 from starlette.applications import Starlette
 
 if TYPE_CHECKING:
     from edgemem.memory.store import MemoryStore
     from edgemem.proxy.telemetry import TelemetryLogger
 
+READ_ONLY_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+ADDITIVE_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+DESTRUCTIVE_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
+    openWorldHint=False,
+)
 
-def create_mcp_server(memory_store: MemoryStore | None = None) -> MCPServer:
+
+def create_mcp_server(
+    memory_store: MemoryStore | None = None,
+    config: Any = None,
+) -> MCPServer:
     """Create the MCPServer instance with EdgeMem tools registered."""
     mcp = MCPServer("EdgeMem")
 
-    # Tools reference telemetry and memory store attached via setters or constructor
-    _telemetry_ref: dict[str, Any] = {"logger": None, "config": None}
+    _telemetry_ref: dict[str, Any] = {"logger": None, "config": config}
     _memory_ref: dict[str, Any] = {"store": memory_store}
 
-    def set_telemetry(logger: TelemetryLogger, config: Any) -> None:
+    def set_telemetry(logger: TelemetryLogger, config_obj: Any) -> None:
         _telemetry_ref["logger"] = logger
-        _telemetry_ref["config"] = config
+        if config_obj is not None:
+            _telemetry_ref["config"] = config_obj
 
     def set_memory(store: MemoryStore) -> None:
         _memory_ref["store"] = store
@@ -38,13 +61,12 @@ def create_mcp_server(memory_store: MemoryStore | None = None) -> MCPServer:
             _memory_ref["store"] = MemoryStore()
         return _memory_ref["store"]
 
-    # Attach setters so the app module can wire them up
     mcp._edgemem_set_telemetry = set_telemetry  # type: ignore[attr-defined]
     mcp._edgemem_telemetry_ref = _telemetry_ref  # type: ignore[attr-defined]
     mcp._edgemem_set_memory = set_memory  # type: ignore[attr-defined]
     mcp._edgemem_memory_ref = _memory_ref  # type: ignore[attr-defined]
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
     async def edgemem_status() -> dict:
         """Return EdgeMem proxy status: RSS, upstream target, and recent telemetry."""
         from edgemem.proxy.telemetry import get_rss_mb
@@ -64,7 +86,7 @@ def create_mcp_server(memory_store: MemoryStore | None = None) -> MCPServer:
             result["telemetry_summary"] = {"note": "telemetry not initialized"}
         return result
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
     async def edgemem_ping(message: str) -> dict:
         """Ping the EdgeMem proxy. Echoes the message back with status info."""
         from edgemem.proxy.telemetry import get_rss_mb
@@ -75,7 +97,7 @@ def create_mcp_server(memory_store: MemoryStore | None = None) -> MCPServer:
             "proxy_rss_mb": round(get_rss_mb(), 2),
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=ADDITIVE_ANNOTATIONS)
     async def edgemem_remember(
         key: str,
         value: str,
@@ -103,7 +125,7 @@ def create_mcp_server(memory_store: MemoryStore | None = None) -> MCPServer:
         )
         return {"status": "ok", "fact_id": fid, "key": key}
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
     async def edgemem_recall(query: str, limit: int = 8) -> dict:
         """Search EdgeMem memory for relevant facts using BM25 FTS5 ranking.
 
@@ -129,7 +151,7 @@ def create_mcp_server(memory_store: MemoryStore | None = None) -> MCPServer:
             ],
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
     async def edgemem_list_facts(kind: str | None = None, limit: int = 20) -> dict:
         """List stored facts in EdgeMem memory.
 
@@ -154,7 +176,7 @@ def create_mcp_server(memory_store: MemoryStore | None = None) -> MCPServer:
             ]
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=DESTRUCTIVE_ANNOTATIONS)
     async def edgemem_forget(fact_id: int) -> dict:
         """Delete a fact from EdgeMem memory by its ID.
 
@@ -165,15 +187,14 @@ def create_mcp_server(memory_store: MemoryStore | None = None) -> MCPServer:
         deleted = store.delete_fact(fact_id)
         return {"status": "ok" if deleted else "not_found", "fact_id": fact_id}
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
     async def edgemem_repo_map(
         repo_path: str,
         max_tokens: int = 1024,
         query: str = "",
         focus_files: list[str] | None = None,
     ) -> dict:
-        """
-        Return a compact, ranked AST repository map for a given directory.
+        """Return a compact, ranked AST repository map for a given directory.
 
         The map is sliced to fit within `max_tokens` using PageRank over the
         symbol dependency graph (Aider RepoMap algorithm, Apache-2.0).
@@ -196,8 +217,21 @@ def create_mcp_server(memory_store: MemoryStore | None = None) -> MCPServer:
 
         from edgemem.slicer.repomap import RepoMap, count_tokens
 
-        t0 = time.perf_counter()
+        config = _telemetry_ref.get("config")
+        allowed_roots: list[str] = getattr(
+            getattr(config, "security", None), "allowed_repo_roots", []
+        )
         rp = Path(repo_path).resolve()
+        if allowed_roots:
+            resolved_roots = [Path(r).resolve() for r in allowed_roots]
+            if not any(
+                rp == root or rp.is_relative_to(root) for root in resolved_roots
+            ):
+                return {
+                    "error": f"Path '{repo_path}' is not within allowed repository roots"
+                }
+
+        t0 = time.perf_counter()
         if not rp.is_dir():
             return {"error": f"Not a directory: {repo_path}"}
 
@@ -222,10 +256,9 @@ def create_mcp_server(memory_store: MemoryStore | None = None) -> MCPServer:
             "latency_ms":      round(elapsed_ms, 1),
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
     async def edgemem_file_outline(file_path: str) -> dict:
-        """
-        Return the AST skeleton (class and function signatures) of a single file.
+        """Return the AST skeleton (class and function signatures) of a single file.
 
         Uses grep-ast TreeContext for supported languages with a regex fallback
         for unsupported extensions.
@@ -244,7 +277,20 @@ def create_mcp_server(memory_store: MemoryStore | None = None) -> MCPServer:
         from edgemem.slicer.repomap import file_outline
         from edgemem.slicer.tags import _lang_for_path
 
+        config = _telemetry_ref.get("config")
+        allowed_roots: list[str] = getattr(
+            getattr(config, "security", None), "allowed_repo_roots", []
+        )
         fp = Path(file_path).resolve()
+        if allowed_roots:
+            resolved_roots = [Path(r).resolve() for r in allowed_roots]
+            if not any(
+                fp == root or fp.is_relative_to(root) for root in resolved_roots
+            ):
+                return {
+                    "error": f"Path '{file_path}' is not within allowed repository roots"
+                }
+
         if not fp.is_file():
             return {"error": f"Not a file: {file_path}"}
 

@@ -20,6 +20,7 @@ from edgemem.privacy.redactor import (
     SecretRedactor,
 )
 from edgemem.privacy.stream_restorer import StreamRestorer
+from edgemem.proxy.auth import EdgeMemAuthMiddleware
 from edgemem.proxy.mcp_server import create_mcp_server, create_mcp_starlette_app
 from edgemem.proxy.middleware import MemoryMiddleware
 from edgemem.proxy.router import HybridRouter, RouteTarget
@@ -274,7 +275,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
     redactor = SecretRedactor(redaction_config)
     counters = ProxyCounters()
 
-    mcp_server = create_mcp_server(memory_store=memory_store)
+    mcp_server = create_mcp_server(memory_store=memory_store, config=cfg)
     mcp_app = create_mcp_starlette_app(mcp_server)
 
     @asynccontextmanager
@@ -308,6 +309,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         telemetry_store.close()
 
     app = FastAPI(title="EdgeMem Proxy", version="1.0.0", lifespan=lifespan)
+    app.add_middleware(EdgeMemAuthMiddleware, config=cfg.security)
     app.state.edgemem_telemetry_store = telemetry_store
     app.state.edgemem_config = cfg
     app.state.edgemem_memory_store = memory_store
@@ -337,6 +339,8 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 "cloud_requests": stats["cloud_requests"],
                 "fallback_escalations": stats["fallback_escalations"],
                 "secrets_redacted_total": stats["secrets_redacted_total"],
+                "auth_enabled": bool(c.security.resolve_auth_token()),
+                "allow_remote_v1": c.security.allow_remote_v1,
             }
         )
 

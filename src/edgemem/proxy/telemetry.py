@@ -17,7 +17,8 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 import platformdirs
-import psutil
+
+from edgemem.proxy.sysinfo import get_process_rss_mb
 
 logger = logging.getLogger("edgemem.proxy.telemetry")
 
@@ -38,7 +39,7 @@ class RequestTelemetry:
 
 def get_rss_mb() -> float:
     """Current process RSS in MB."""
-    return psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
+    return get_process_rss_mb()
 
 
 class TelemetryStore:

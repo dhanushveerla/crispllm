@@ -188,6 +188,8 @@ def status(config_path: Path | None) -> None:
         privacy_enabled = data.get("privacy_enabled", False)
         secrets_redacted = data.get("secrets_redacted_total", 0)
         click.echo(f"Privacy: {'enabled' if privacy_enabled else 'disabled'} ({secrets_redacted} redacted)")
+        auth_enabled = data.get("auth_enabled", False)
+        click.echo(f"Auth: {'enabled' if auth_enabled else 'disabled (localhost only)'}")
         local_reqs = data.get("local_requests", 0)
         cloud_reqs = data.get("cloud_requests", 0)
         fallbacks = data.get("fallback_escalations", 0)

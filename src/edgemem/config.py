@@ -80,6 +80,26 @@ class PrivacyConfig:
 
 
 @dataclass
+class SecurityConfig:
+    """Configuration for pre-release security, authentication, and tunnel isolation."""
+
+    auth_token_env: str = ""
+    auth_token: str = ""
+    allow_remote_v1: bool = False
+    allowed_repo_roots: list[str] = field(default_factory=list)
+
+    def resolve_auth_token(self) -> str:
+        """Resolve authentication token from env var or literal fallback."""
+        if self.auth_token_env:
+            val = os.environ.get(self.auth_token_env)
+            if val is not None and val.strip():
+                return val.strip()
+        if self.auth_token:
+            return self.auth_token.strip()
+        return ""
+
+
+@dataclass
 class EdgeMemConfig:
     """Full EdgeMem configuration."""
 
@@ -98,6 +118,7 @@ class EdgeMemConfig:
     cloud: CloudUpstreamConfig = field(default_factory=CloudUpstreamConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
 
     @property
     def upstream_api_key(self) -> str | None:
@@ -138,6 +159,7 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
     cloud = raw.get("cloud", {})
     routing = raw.get("routing", {})
     privacy = raw.get("privacy", {})
+    security = raw.get("security", {})
 
     memory_cfg = MemoryConfig(
         enabled=memory.get("enabled", MemoryConfig.enabled),
@@ -199,6 +221,15 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         extra_patterns=list(privacy.get("extra_patterns", [])),
     )
 
+    security_cfg = SecurityConfig(
+        auth_token_env=security.get("auth_token_env", SecurityConfig.auth_token_env),
+        auth_token=security.get("auth_token", SecurityConfig.auth_token),
+        allow_remote_v1=bool(
+            security.get("allow_remote_v1", SecurityConfig.allow_remote_v1)
+        ),
+        allowed_repo_roots=list(security.get("allowed_repo_roots", [])),
+    )
+
     return EdgeMemConfig(
         host=server.get("host", EdgeMemConfig.host),
         port=server.get("port", EdgeMemConfig.port),
@@ -213,6 +244,7 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         cloud=cloud_cfg,
         routing=routing_cfg,
         privacy=privacy_cfg,
+        security=security_cfg,
     )
 
 

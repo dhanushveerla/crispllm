@@ -105,3 +105,24 @@ redact_ips = false
 
 # Additional regex patterns to redact (empty list by default).
 extra_patterns = []
+
+[security]
+# Bearer authentication token for remote clients (Claude Web, ChatGPT Web, Manus, etc.).
+# When set, all /mcp and /v1 requests require an "Authorization: Bearer <token>" header.
+# auth_token_env specifies the environment variable name to read the token from.
+auth_token_env = ""
+
+# Literal fallback token if auth_token_env is not set or empty.
+auth_token = ""
+
+# Allow remote tunnel traffic to access paid /v1 chat completions.
+# When false (recommended default for HTTPS tunnels), requests carrying proxy headers
+# (x-forwarded-for, cf-connecting-ip, forwarded, x-real-ip) targeting /v1 are blocked
+# with HTTP 403 Forbidden to prevent accidental cloud spend over public tunnels.
+allow_remote_v1 = false
+
+# Restrict MCP filesystem access (repo_map and file_outline) to specific directory roots.
+# Paths outside these roots (including symlink escapes and .. traversal) are rejected.
+# Leave empty to allow unrestricted local path access.
+# allowed_repo_roots = ["/home/user/projects"]
+allowed_repo_roots = []
