@@ -77,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Subprocess timeout in seconds for each test_code run (default: 10)")
     p.add_argument("--timeout-llm", type=int, default=120,
                    help="HTTP timeout in seconds for each LLM call (default: 120)")
+    p.add_argument("--delay", type=float, default=0.0, metavar="SECONDS",
+                   help="Fixed delay between tasks in seconds (default 0.0). "
+                        "Use for low-RPM providers like Gemini free tier.")
+    p.add_argument("--max-retries", type=int, default=4,
+                   help="Max retry attempts on HTTP 429/503 (default 4).")
     return p
 
 
@@ -84,16 +89,69 @@ def build_parser() -> argparse.ArgumentParser:
 # HTTP helpers (stdlib only — no httpx/requests dependency at bench time)
 # ---------------------------------------------------------------------------
 
-def _http_post_json(url: str, payload: dict, api_key: str, timeout: int) -> dict:
-    """POST JSON, return parsed response dict. Raises on HTTP error."""
+class _RateLimitError(Exception):
+    """HTTP 429 or 503 from upstream; carries retry-after hint."""
+    def __init__(self, status: int, retry_after: float | None = None):
+        self.status = status
+        self.retry_after = retry_after  # seconds to wait, or None
+
+
+def _http_post_json(
+    url: str,
+    payload: dict,
+    api_key: str,
+    timeout: int,
+    max_retries: int = 4,
+) -> dict:
+    """
+    POST JSON with exponential-backoff retry on HTTP 429 and 503.
+
+    Respects the ``Retry-After`` response header when present (integer seconds
+    or HTTP-date format).  Falls back to exponential backoff: 2, 4, 8, 16 s.
+
+    Raises:
+        _RateLimitError  — if retries exhausted on 429/503.
+        urllib.error.HTTPError — for other 4xx/5xx codes.
+        urllib.error.URLError  — for connection failures.
+    """
     body = json.dumps(payload).encode()
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}" if api_key else "Bearer none",
     }
-    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode())
+
+    base_delay = 2.0
+    for attempt in range(max_retries + 1):
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            if exc.code in (429, 503):
+                # Parse Retry-After
+                retry_after: float | None = None
+                ra_header = exc.headers.get("Retry-After") or exc.headers.get("retry-after")
+                if ra_header:
+                    try:
+                        retry_after = float(ra_header)
+                    except ValueError:
+                        # Could be an HTTP-date; use backoff instead
+                        retry_after = None
+
+                if attempt >= max_retries:
+                    raise _RateLimitError(exc.code, retry_after) from exc
+
+                wait = retry_after if retry_after is not None else base_delay * (2 ** attempt)
+                print(
+                    f"    [bench] HTTP {exc.code} — retrying in {wait:.1f}s "
+                    f"(attempt {attempt + 1}/{max_retries})",
+                    file=sys.stderr,
+                )
+                time.sleep(wait)
+            else:
+                raise
+    # Should never reach here
+    raise RuntimeError("Unexpected retry loop exit")
 
 
 def _http_get_json(url: str, timeout: int = 5) -> dict | None:
@@ -154,6 +212,7 @@ def run_task(
     extra_body: dict,
     timeout_llm: int,
     timeout_task: int,
+    max_retries: int = 4,
 ) -> dict:
     """
     Execute a single benchmark task.
@@ -212,6 +271,7 @@ def run_task(
                 payload,
                 api_key,
                 timeout_llm,
+                max_retries=max_retries,
             )
             t1 = time.perf_counter()
             ttft_ms = (t1 - t0) * 1000  # approximation for non-streaming
@@ -471,6 +531,7 @@ def main() -> None:
             extra_body=extra_body,
             timeout_llm=args.timeout_llm,
             timeout_task=args.timeout_task,
+            max_retries=args.max_retries,
         )
         elapsed = time.perf_counter() - t0
         status_icon = "✅" if result["passed"] else "❌"
@@ -478,6 +539,9 @@ def main() -> None:
         if not result["passed"] and result.get("error"):
             print(f"         error: {result['error'][:120]}")
         results.append(result)
+
+        if args.delay > 0 and i < len(all_tasks):
+            time.sleep(args.delay)
 
     # Optional: get RSS after run
     rss_after: float | None = None

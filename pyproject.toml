@@ -11,14 +11,17 @@ requires-python = ">=3.11"
 dependencies = [
     "click>=8.1.0",
     "fastapi>=0.165.0",
+    "grep-ast>=0.9.0",
     "httpx>=0.28.1",
     "mcp>=2.3.0",
+    "networkx>=3.6.1",
     "platformdirs>=4.14.7",
     "psutil>=7.2.2",
     "pydantic>=2.0",
     "pydantic-settings>=2.16.3",
     "tiktoken>=0.14.0",
     "tomli-w>=1.2.0",
+    "tree-sitter-language-pack>=1.25.2",
     "uvicorn>=0.54.0",
 ]
 

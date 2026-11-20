@@ -62,6 +62,97 @@ def create_mcp_server() -> MCPServer:
             "proxy_rss_mb": round(get_rss_mb(), 2),
         }
 
+    @mcp.tool()
+    async def edgemem_repo_map(
+        repo_path: str,
+        max_tokens: int = 1024,
+        query: str = "",
+        focus_files: list[str] | None = None,
+    ) -> dict:
+        """
+        Return a compact, ranked AST repository map for a given directory.
+
+        The map is sliced to fit within `max_tokens` using PageRank over the
+        symbol dependency graph (Aider RepoMap algorithm, Apache-2.0).
+
+        Args:
+            repo_path:   Absolute or relative path to the repository root.
+            max_tokens:  Hard token budget for the output map (default 1024).
+            query:       Natural language query to boost relevant definitions.
+            focus_files: List of relative file paths to prioritise in ranking.
+
+        Returns:
+            dict with keys:
+              - repo_map (str): The formatted repo map text.
+              - sliced_tokens (int): Token count of the output map.
+              - raw_tokens (int): Total token count of all source files.
+              - compression_pct (float): Percentage reduction.
+        """
+        import time
+        from pathlib import Path
+
+        from edgemem.slicer.repomap import RepoMap, count_tokens
+
+        t0 = time.perf_counter()
+        rp = Path(repo_path).resolve()
+        if not rp.is_dir():
+            return {"error": f"Not a directory: {repo_path}"}
+
+        rm = RepoMap(repo_path=rp, max_tokens=max_tokens)
+        raw_tokens = rm.raw_token_count()
+        repo_map_text = rm.get_repo_map(
+            focus_files=focus_files,
+            mentioned_symbols=None,
+            query=query,
+        )
+        sliced_tokens = count_tokens(repo_map_text)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        compression_pct = (
+            (raw_tokens - sliced_tokens) / raw_tokens * 100.0
+            if raw_tokens > 0 else 0.0
+        )
+        return {
+            "repo_map":        repo_map_text,
+            "sliced_tokens":   sliced_tokens,
+            "raw_tokens":      raw_tokens,
+            "compression_pct": round(compression_pct, 2),
+            "latency_ms":      round(elapsed_ms, 1),
+        }
+
+    @mcp.tool()
+    async def edgemem_file_outline(file_path: str) -> dict:
+        """
+        Return the AST skeleton (class and function signatures) of a single file.
+
+        Uses grep-ast TreeContext for supported languages with a regex fallback
+        for unsupported extensions.
+
+        Args:
+            file_path: Absolute or relative path to the source file.
+
+        Returns:
+            dict with keys:
+              - outline (str): Formatted signature skeleton.
+              - file_path (str): Resolved absolute path.
+              - language (str|None): Detected language or null.
+        """
+        from pathlib import Path
+
+        from edgemem.slicer.repomap import file_outline
+        from edgemem.slicer.tags import _lang_for_path
+
+        fp = Path(file_path).resolve()
+        if not fp.is_file():
+            return {"error": f"Not a file: {file_path}"}
+
+        lang = _lang_for_path(fp)
+        outline_text = file_outline(fp, rel_path=str(fp))
+        return {
+            "outline":   outline_text,
+            "file_path": str(fp),
+            "language":  lang,
+        }
+
     return mcp
 
 

@@ -1,11 +1,12 @@
 """EdgeMem CLI — console entrypoint.
 
-Supports: edgemem serve, edgemem init, edgemem status.
+Supports: edgemem serve, edgemem init, edgemem status, edgemem slice.
 """
 
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -72,3 +73,63 @@ def status(config_path: Path | None) -> None:
     except httpx.ConnectError:
         click.echo(f"EdgeMem not running at {url}", err=True)
         sys.exit(1)
+
+
+@cli.command()
+@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--tokens", default=1024, show_default=True,
+              help="Maximum tokens in the output repo map.")
+@click.option("--query", default="", show_default=False,
+              help="Natural language query to boost relevant definitions.")
+@click.option("--focus", "focus_files", multiple=True, metavar="FILE",
+              help="Relative paths to focus files (may be repeated).")
+@click.option("--model", default="cl100k_base", show_default=True,
+              help="tiktoken encoding for token counting.")
+def slice(
+    path: Path,
+    tokens: int,
+    query: str,
+    focus_files: tuple[str, ...],
+    model: str,
+) -> None:
+    """Slice a repository into a compact, ranked AST repo map.
+
+    PATH  Root of the repository (or sub-directory) to slice.
+
+    Prints the repo map to stdout.
+    Prints token counts, compression %, and latency to stderr.
+
+    Example:
+        edgemem slice . --tokens 2048 --query "authentication" --focus src/auth.py
+    """
+    from edgemem.slicer.repomap import RepoMap, count_tokens
+
+    t0 = time.perf_counter()
+
+    rm = RepoMap(repo_path=path, max_tokens=tokens, model_name=model)
+
+    # Raw token count (before slicing)
+    raw_tokens = rm.raw_token_count()
+
+    repo_map = rm.get_repo_map(
+        focus_files=list(focus_files) or None,
+        mentioned_symbols=None,
+        query=query,
+    )
+
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    sliced_tokens = count_tokens(repo_map, model)
+    compression_pct = (
+        (raw_tokens - sliced_tokens) / raw_tokens * 100.0
+        if raw_tokens > 0 else 0.0
+    )
+
+    # Map to stdout
+    click.echo(repo_map, nl=False)
+
+    # Stats to stderr
+    click.echo(
+        f"\n[EdgeMem slice] raw={raw_tokens:,} tok  sliced={sliced_tokens:,} tok  "
+        f"compression={compression_pct:.1f}%  latency={elapsed_ms:.0f}ms",
+        err=True,
+    )
