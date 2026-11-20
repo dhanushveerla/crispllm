@@ -229,8 +229,6 @@ port = 8080
 base_url = "http://127.0.0.1:11434/v1"
 model = "qwen2.5-coder:7b"
 
-[telemetry]
-
 [memory]
 enabled = true
 max_injected_tokens = 384
@@ -269,8 +267,6 @@ port = 8080
 [upstream]
 base_url = "http://127.0.0.1:11434/v1"
 model = "qwen2.5-coder:7b"
-
-[telemetry]
 
 [memory]
 enabled = true
@@ -312,8 +308,6 @@ base_url = "https://integrate.api.nvidia.com/v1"
 api_key_env = "NVIDIA_API_KEY"
 model = "nvidia/nemotron-3.5-bolt-e4b"
 
-[telemetry]
-
 [memory]
 enabled = true
 max_injected_tokens = 384
@@ -353,8 +347,6 @@ port = 8080
 base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
 api_key_env = "GEMINI_API_KEY"
 model = "gemini-2.5-flash"
-
-[telemetry]
 
 [memory]
 enabled = true

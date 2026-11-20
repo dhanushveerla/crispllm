@@ -9,12 +9,19 @@ wheels/
 # Virtual environments
 .venv
 
+# Profiling
+*.prof
+
 # EdgeMem local artifacts
 .env
+.edgemem/
 *.db
+*.db-wal
+*.db-shm
 *.bin
 *.gguf
 edgemem.toml
 
 # Benchmark result artifacts (commit explicit baseline reports manually)
 bench/results/
+!bench/baselines/

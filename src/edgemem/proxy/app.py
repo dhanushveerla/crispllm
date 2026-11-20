@@ -307,7 +307,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         memory_store.close()
         telemetry_store.close()
 
-    app = FastAPI(title="EdgeMem Proxy", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="EdgeMem Proxy", version="1.0.0", lifespan=lifespan)
     app.state.edgemem_telemetry_store = telemetry_store
     app.state.edgemem_config = cfg
     app.state.edgemem_memory_store = memory_store

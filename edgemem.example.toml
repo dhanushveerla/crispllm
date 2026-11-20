@@ -1,0 +1,107 @@
+# ==============================================================================
+# EdgeMem Configuration Example (edgemem.example.toml)
+#
+# EdgeMem is a lightweight, unified memory & context proxy for AI coding.
+# Copy this file to edgemem.toml (in project root or ~/.config/edgemem/edgemem.toml)
+# and adjust parameters as needed.
+# ==============================================================================
+
+[server]
+# Host interface and port for the EdgeMem proxy server.
+# Serves both OpenAI-compatible API at /v1/chat/completions and MCP at /mcp.
+host = "127.0.0.1"
+port = 8080
+
+[upstream]
+# Primary local LLM endpoint (default: Ollama OpenAI-compatible endpoint).
+base_url = "http://127.0.0.1:11434/v1"
+
+# Primary local model identifier.
+model = "qwen2.5-coder:7b"
+
+# Optional environment variable name holding API key (empty for local Ollama).
+api_key_env = ""
+
+[upstream.extra_body]
+# Additional parameters merged into requests forwarded to the upstream model.
+# e.g., reasoning_effort = "none"
+
+[memory]
+# Enable SQLite-backed tiered persistent memory and turn compaction.
+enabled = true
+
+# Maximum number of tokens dedicated to injected architectural facts / constraints.
+max_injected_tokens = 384
+
+# Automatically inject relevant constraints and pinned architectural facts into prompts.
+inject_constraints = true
+
+# Automatically extract key constants, signatures, and constraints from conversation turns.
+auto_extract = true
+
+# Enable compaction of middle turns in long conversations to stay within small context windows.
+compact_middle_turns = true
+
+# Token threshold above which turn compaction triggers (set to 0 to always compact middle turns).
+compact_threshold_tokens = 2000
+
+# Minimum token count for an individual turn to be considered for middle-turn compaction.
+compact_min_turn_tokens = 150
+
+# Number of most recent conversation turns to always preserve verbatim.
+keep_recent_turns = 2
+
+# Path to SQLite database file. If omitted, defaults to ~/.local/share/edgemem/memory.db
+# db_path = "memory.db"
+
+[cloud]
+# Enable optional cloud escalation and fallback provider.
+enabled = true
+
+# Base URL for cloud API (e.g., NVIDIA NIM, DeepSeek, or OpenAI).
+base_url = "https://integrate.api.nvidia.com/v1"
+
+# Environment variable name holding the cloud provider API key.
+api_key_env = "NVIDIA_API_KEY"
+
+# Cloud model identifier used for escalated or fallback requests.
+model = "nvidia/nemotron-3.5-bolt-e4b"
+
+# HTTP timeout in seconds for cloud requests.
+timeout_s = 60.0
+
+[routing]
+# Routing strategy:
+#   "local_first" - Route to local upstream first; escalate to cloud when prompt exceeds
+#                   threshold or if local upstream fails.
+#   "local_only"  - Never route to cloud provider.
+#   "cloud_only"  - Always route to cloud provider.
+strategy = "local_first"
+
+# Prompt token threshold to trigger proactive escalation to the cloud model.
+escalate_token_threshold = 6000
+
+# Fall back to cloud upstream if local model returns connection error, 5xx, 429, or 404.
+escalate_on_local_error = true
+
+# Timeout in seconds before considering a local request timed out.
+local_timeout_s = 30.0
+
+[privacy]
+# Enable zero-dependency secret and PII redaction.
+enabled = true
+
+# Only redact when requests are routed to external/cloud endpoints (preserves local plaintext).
+redact_on_cloud_only = true
+
+# Redact detected API keys, bearer tokens, private keys, and high-entropy secrets.
+redact_secrets = true
+
+# Redact email addresses.
+redact_emails = true
+
+# Redact IPv4 / IPv6 addresses.
+redact_ips = false
+
+# Additional regex patterns to redact (empty list by default).
+extra_patterns = []
