@@ -1,7 +1,8 @@
 """Memory middleware for EdgeMem OpenAI proxy.
 
 Handles session isolation, auto-extraction of facts/constraints, retrieval of
-active memory, token budget enforcement, and non-destructive injection into upstream prompts.
+active memory, token budget enforcement without tiktoken, clean non-overriding formatting,
+and tiered middle-turn compaction (FR-04).
 """
 
 from __future__ import annotations
@@ -9,9 +10,8 @@ from __future__ import annotations
 import copy
 import hashlib
 import logging
+import re
 from typing import Any, Mapping
-
-import tiktoken
 
 from edgemem.config import MemoryConfig
 from edgemem.memory.extractor import extract_facts_from_messages
@@ -19,15 +19,22 @@ from edgemem.memory.store import Fact, MemoryStore
 
 logger = logging.getLogger("edgemem.proxy.memory")
 
-_ENCODING: tiktoken.Encoding | None = None
+_STOPWORDS = {
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "of",
+    "with", "by", "from", "up", "about", "into", "through", "after", "is", "am",
+    "are", "was", "were", "be", "been", "being", "have", "has", "had", "do",
+    "does", "did", "can", "could", "will", "would", "shall", "should", "may",
+    "might", "must", "it", "its", "this", "that", "these", "those", "i", "you",
+    "he", "she", "we", "they", "me", "him", "her", "us", "them", "what", "which",
+    "who", "whom", "how", "when", "where", "why", "now", "please", "tell",
+}
 
 
-def _get_encoding() -> tiktoken.Encoding:
-    """Return module-cached tiktoken encoder."""
-    global _ENCODING
-    if _ENCODING is None:
-        _ENCODING = tiktoken.get_encoding("cl100k_base")
-    return _ENCODING
+def estimate_tokens(text: str) -> int:
+    """Fast zero-allocation token count estimator (~4 characters per token)."""
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
 
 
 def _get_message_text(msg: dict[str, Any]) -> str:
@@ -46,8 +53,51 @@ def _get_message_text(msg: dict[str, Any]) -> str:
     return ""
 
 
+def _has_lexical_overlap(msg_text: str, query_text: str) -> bool:
+    """Check if message shares meaningful keywords or code identifiers with query."""
+    query_tokens = set(re.findall(r"[A-Za-z0-9_]+", query_text.lower())) - _STOPWORDS
+    if not query_tokens:
+        return False
+    msg_tokens = set(re.findall(r"[A-Za-z0-9_]+", msg_text.lower())) - _STOPWORDS
+    shared = query_tokens.intersection(msg_tokens)
+    return len(shared) >= 2 or any(
+        tok in msg_tokens for tok in query_tokens if "_" in tok or tok.isupper() or len(tok) > 6
+    )
+
+
+def _has_code_reference(msg_text: str, query_text: str) -> bool:
+    """Check if message defines code symbols that are explicitly mentioned in query."""
+    symbols = set(re.findall(r"\b(?:def|class)\s+([A-Za-z0-9_]+)", msg_text))
+    symbols.update(re.findall(r"^\s*([A-Z][A-Z0-9_]{1,63})\s*=", msg_text, re.MULTILINE))
+    if not symbols:
+        return False
+    query_tokens = set(re.findall(r"[A-Za-z0-9_]+", query_text))
+    return bool(symbols.intersection(query_tokens))
+
+
+def _format_fact_line(fact: Fact) -> str:
+    """Format fact line without internal constraint hash keys or duplicate variable names."""
+    val = fact.value.strip()
+    if fact.kind in ("constraint", "note"):
+        return f"- {val}"
+    # For constants or signatures: if val already starts with identifier or def/class, render directly
+    if (
+        val.startswith(fact.key)
+        or val.startswith(f"def {fact.key}")
+        or val.startswith(f"async def {fact.key}")
+        or val.startswith(f"class {fact.key}")
+    ):
+        return f"- {val}"
+    return f"- {fact.key}: {val}"
+
+
+def _normalize_fact_value(val: str) -> str:
+    """Normalize fact text for duplicate detection."""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-zA-Z0-9_]+", " ", val.lower())).strip()
+
+
 class MemoryMiddleware:
-    """Proxy middleware for transparent tiered memory retrieval and extraction."""
+    """Proxy middleware for transparent tiered memory retrieval, extraction, and compaction."""
 
     def __init__(self, store: MemoryStore, config: MemoryConfig) -> None:
         self.store = store
@@ -57,12 +107,10 @@ class MemoryMiddleware:
         self, messages: list[dict[str, Any]], headers: Mapping[str, str]
     ) -> str:
         """Derive an isolated session ID from headers or initial turn content."""
-        # Check custom header first
         for k, v in headers.items():
             if k.lower() == "x-edgemem-session" and v:
                 return v.strip()
 
-        # Deterministic hash of first system message + first user message
         system_text = ""
         user_text = ""
         for msg in messages:
@@ -84,27 +132,53 @@ class MemoryMiddleware:
 
         Returns:
             (modified_or_original_body, telemetry_dict)
-            telemetry_dict contains "facts_extracted" and "memory_injected_tokens".
+            telemetry_dict contains "facts_extracted", "memory_injected_tokens", and "compacted_turns".
         """
         if not self.config.enabled:
-            return body, {"facts_extracted": 0, "memory_injected_tokens": 0}
+            return body, {
+                "facts_extracted": 0,
+                "memory_injected_tokens": 0,
+                "compacted_turns": 0,
+            }
 
         messages = body.get("messages")
         if not isinstance(messages, list) or not messages:
-            return body, {"facts_extracted": 0, "memory_injected_tokens": 0}
+            return body, {
+                "facts_extracted": 0,
+                "memory_injected_tokens": 0,
+                "compacted_turns": 0,
+            }
 
         try:
             session_id = self._derive_session_id(messages, headers)
-            facts_extracted = 0
-
             user_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
             if not user_indices:
-                return body, {"facts_extracted": 0, "memory_injected_tokens": 0}
+                return body, {
+                    "facts_extracted": 0,
+                    "memory_injected_tokens": 0,
+                    "compacted_turns": 0,
+                }
 
             last_user_idx = user_indices[-1]
+            last_user_text = _get_message_text(messages[last_user_idx])
 
-            # Auto-extract facts from prior conversation turns
-            if self.config.auto_extract and last_user_idx > 0:
+            # Stop single-turn self-duplication:
+            # If request has only 1 user message and no saved facts exist, skip injection completely.
+            if len(user_indices) == 1:
+                existing_facts = self.store.list_facts(session_id=session_id, limit=1)
+                global_pinned = self.store.get_pinned_facts(
+                    session_id=session_id, include_global=True, limit=1
+                )
+                if not existing_facts and not global_pinned:
+                    return body, {
+                        "facts_extracted": 0,
+                        "memory_injected_tokens": 0,
+                        "compacted_turns": 0,
+                    }
+
+            # 1. Auto-extract facts from turns strictly before final user message
+            facts_extracted = 0
+            if self.config.auto_extract and len(user_indices) > 1:
                 extracted = extract_facts_from_messages(messages)
                 for ef in extracted:
                     self.store.upsert_fact(
@@ -118,9 +192,9 @@ class MemoryMiddleware:
                     )
                 facts_extracted = len(extracted)
 
-            # Retrieve facts to inject: pinned constraints first, then BM25 search
+            # 2. Retrieve facts to inject: pinned constraints first, then BM25 search
             candidate_facts: list[Fact] = []
-            seen: set[tuple[str, str]] = set()
+            seen_keys: set[tuple[str, str]] = set()
 
             if self.config.inject_constraints:
                 pinned = self.store.get_pinned_facts(
@@ -128,12 +202,10 @@ class MemoryMiddleware:
                 )
                 for f in pinned:
                     k = (f.kind, f.key)
-                    if k not in seen:
-                        seen.add(k)
+                    if k not in seen_keys:
+                        seen_keys.add(k)
                         candidate_facts.append(f)
 
-            # Query with final user prompt text
-            last_user_text = _get_message_text(messages[last_user_idx])
             if last_user_text:
                 search_res = self.store.search_facts(
                     query=last_user_text,
@@ -143,62 +215,116 @@ class MemoryMiddleware:
                 )
                 for f in search_res:
                     k = (f.kind, f.key)
-                    if k not in seen:
-                        seen.add(k)
+                    if k not in seen_keys:
+                        seen_keys.add(k)
                         candidate_facts.append(f)
 
-            if not candidate_facts:
-                return body, {
-                    "facts_extracted": facts_extracted,
-                    "memory_injected_tokens": 0,
-                }
-
-            # Format memory block and enforce token budget
-            enc = _get_encoding()
-            header = "[EdgeMem Active Memory]"
-            fact_lines = [f"- {f.key}: {f.value}" for f in candidate_facts]
-
-            while fact_lines:
-                test_block = header + "\n" + "\n".join(fact_lines)
-                tok_count = len(enc.encode(test_block))
-                if tok_count <= self.config.max_injected_tokens:
-                    break
-                fact_lines.pop()
-
-            if not fact_lines:
-                return body, {
-                    "facts_extracted": facts_extracted,
-                    "memory_injected_tokens": 0,
-                }
-
-            memory_block = header + "\n" + "\n".join(fact_lines)
-            injected_tokens = len(enc.encode(memory_block))
-
-            # Non-destructive injection
-            new_body = dict(body)
+            # 3. Middle-turn compaction (FR-04):
+            # When conversation contains >= 3 user messages, compact middle distractor turns into episodes.
+            compacted_turns = 0
             new_messages = copy.deepcopy(messages)
 
-            first_msg = new_messages[0]
-            if first_msg.get("role") == "system":
-                first_content = first_msg.get("content")
-                if isinstance(first_content, str):
-                    first_msg["content"] = f"{first_content}\n\n{memory_block}"
-                elif isinstance(first_content, list):
-                    content_list = list(first_content)
-                    content_list.append({"type": "text", "text": f"\n\n{memory_block}"})
-                    first_msg["content"] = content_list
+            if self.config.compact_middle_turns and len(user_indices) >= 3:
+                first_user_idx = user_indices[0]
+                # Preserve final turn and keep_recent_turns threshold
+                recent_user_threshold = (
+                    user_indices[-(self.config.keep_recent_turns - 1)]
+                    if self.config.keep_recent_turns > 1
+                    else last_user_idx
+                )
+
+                for idx in range(first_user_idx + 2, recent_user_threshold):
+                    m = new_messages[idx]
+                    role = m.get("role")
+                    if role in ("system", "tool") or "tool_calls" in m:
+                        continue
+
+                    text = _get_message_text(m)
+                    if not text:
+                        continue
+
+                    # Archive into episodes
+                    self.store.add_episode(
+                        session_id=session_id,
+                        role=role,
+                        summary=text[:300],
+                        raw_tokens=estimate_tokens(text),
+                    )
+
+                    # If off-topic distractor with low overlap and no code definitions, compact
+                    if not _has_lexical_overlap(text, last_user_text) and not _has_code_reference(
+                        text, last_user_text
+                    ):
+                        new_messages[idx] = {"role": role, "content": "[Compacted earlier turn]"}
+                        compacted_turns += 1
+
+            # 4. Format active memory block and enforce token budget
+            memory_block = ""
+            injected_tokens = 0
+
+            if candidate_facts:
+                header = (
+                    "[EdgeMem Active Memory]\n"
+                    "Earlier-turn constraints & facts (follow these unless the latest user message "
+                    "explicitly specifies an exception or return behavior):"
+                )
+
+                seen_vals: set[str] = set()
+                fact_lines: list[str] = []
+                for f in candidate_facts:
+                    norm = _normalize_fact_value(f.value)
+                    if norm in seen_vals:
+                        continue
+                    seen_vals.add(norm)
+                    fact_lines.append(_format_fact_line(f))
+
+                while fact_lines:
+                    test_block = header + "\n" + "\n".join(fact_lines)
+                    tok_count = estimate_tokens(test_block)
+                    if tok_count <= self.config.max_injected_tokens:
+                        break
+                    fact_lines.pop()
+
+                if fact_lines:
+                    memory_block = header + "\n" + "\n".join(fact_lines)
+                    injected_tokens = estimate_tokens(memory_block)
+
+            # If nothing was injected and no turns were compacted, return original body
+            if not memory_block and compacted_turns == 0:
+                return body, {
+                    "facts_extracted": facts_extracted,
+                    "memory_injected_tokens": 0,
+                    "compacted_turns": 0,
+                }
+
+            # 5. Non-destructive prompt injection
+            new_body = dict(body)
+            if memory_block:
+                first_msg = new_messages[0]
+                if first_msg.get("role") == "system":
+                    first_content = first_msg.get("content")
+                    if isinstance(first_content, str):
+                        first_msg["content"] = f"{first_content}\n\n{memory_block}"
+                    elif isinstance(first_content, list):
+                        content_list = list(first_content)
+                        content_list.append({"type": "text", "text": f"\n\n{memory_block}"})
+                        first_msg["content"] = content_list
+                    else:
+                        new_messages.insert(0, {"role": "system", "content": memory_block})
                 else:
                     new_messages.insert(0, {"role": "system", "content": memory_block})
-            else:
-                new_messages.insert(0, {"role": "system", "content": memory_block})
 
             new_body["messages"] = new_messages
             return new_body, {
                 "facts_extracted": facts_extracted,
                 "memory_injected_tokens": injected_tokens,
+                "compacted_turns": compacted_turns,
             }
 
         except Exception as e:
-            # Fail-open: memory errors must never break user requests
             logger.exception("MemoryMiddleware error, failing open: %s", e)
-            return body, {"facts_extracted": 0, "memory_injected_tokens": 0}
+            return body, {
+                "facts_extracted": 0,
+                "memory_injected_tokens": 0,
+                "compacted_turns": 0,
+            }

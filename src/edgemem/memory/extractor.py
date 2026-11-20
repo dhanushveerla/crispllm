@@ -264,11 +264,14 @@ def extract_facts_from_messages(
         return []
 
     user_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
-    if not user_indices:
-        earlier_turns = list(enumerate(messages[:-1])) if len(messages) > 1 else []
-    else:
-        last_user_idx = user_indices[-1]
-        earlier_turns = list(enumerate(messages[:last_user_idx]))
+    if not user_indices or len(user_indices) <= 1:
+        return []
+
+    last_user_idx = user_indices[-1]
+    # Only inspect turns strictly BEFORE the final user message, and never extract from system prompt
+    earlier_turns = [
+        (i, m) for i, m in enumerate(messages[:last_user_idx]) if m.get("role") != "system"
+    ]
 
     constraints: list[ExtractedFact] = []
     code_facts: list[ExtractedFact] = []

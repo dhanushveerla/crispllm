@@ -32,6 +32,8 @@ class MemoryConfig:
     max_injected_tokens: int = 384
     inject_constraints: bool = True
     auto_extract: bool = True
+    compact_middle_turns: bool = True
+    keep_recent_turns: int = 2
     db_path: str | None = None
 
 
@@ -112,6 +114,12 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
             "inject_constraints", MemoryConfig.inject_constraints
         ),
         auto_extract=memory.get("auto_extract", MemoryConfig.auto_extract),
+        compact_middle_turns=memory.get(
+            "compact_middle_turns", MemoryConfig.compact_middle_turns
+        ),
+        keep_recent_turns=memory.get(
+            "keep_recent_turns", MemoryConfig.keep_recent_turns
+        ),
         db_path=memory.get("db_path", MemoryConfig.db_path),
     )
 
@@ -155,5 +163,7 @@ enabled = true
 max_injected_tokens = 384
 inject_constraints = true
 auto_extract = true
+compact_middle_turns = true
+keep_recent_turns = 2
 # db_path = "/custom/memory.db"  # defaults to platformdirs user_data_dir("edgemem") / "memory.db"
 """

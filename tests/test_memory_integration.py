@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,6 +15,7 @@ from starlette.testclient import TestClient
 
 from edgemem.cli import cli
 from edgemem.config import EdgeMemConfig, MemoryConfig
+from edgemem.proxy import middleware
 from edgemem.proxy.app import create_app
 
 MOCK_UPSTREAM_RESPONSE: dict[str, Any] = {
@@ -63,6 +65,8 @@ def _make_app(tmp_path: Path, memory_enabled: bool = True, max_tokens: int = 384
             max_injected_tokens=max_tokens,
             inject_constraints=True,
             auto_extract=True,
+            compact_middle_turns=True,
+            keep_recent_turns=2,
             db_path=str(db_file),
         ),
     )
@@ -84,6 +88,122 @@ def _make_app(tmp_path: Path, memory_enabled: bool = True, max_tokens: int = 384
 
     app.router.lifespan_context = patched_lifespan
     return app, transport, cfg
+
+
+def test_tiktoken_not_imported_by_middleware() -> None:
+    """Ensure tiktoken is never imported by proxy middleware to keep RSS < 85 MB."""
+    source = inspect.getsource(middleware)
+    assert "import tiktoken" not in source
+    assert "from tiktoken" not in source
+
+
+def test_single_turn_request_no_injection(tmp_path: Path) -> None:
+    """Single-turn requests with empty store must add 0 overhead tokens and leave messages untouched."""
+    app, transport, _ = _make_app(tmp_path, memory_enabled=True)
+    single_turn = [
+        {"role": "system", "content": "You are a Python coding assistant."},
+        {"role": "user", "content": "Write a function to add two numbers."},
+    ]
+    with TestClient(app) as client:
+        resp = client.post("/v1/chat/completions", json={"messages": single_turn})
+        assert resp.status_code == 200
+
+    assert len(transport.recorded_bodies) == 1
+    sent_messages = transport.recorded_bodies[0]["messages"]
+    assert sent_messages == single_turn
+
+
+def test_clean_formatting_and_precedence_note(tmp_path: Path) -> None:
+    """Injected memory must omit internal hash keys and include the non-overriding precedence note."""
+    app, transport, _ = _make_app(tmp_path, memory_enabled=True)
+    messages = [
+        {
+            "role": "user",
+            "content": "Rule: DatabaseConnection must be a singleton. The Cache must be frozen.",
+        },
+        {
+            "role": "assistant",
+            "content": "Noted.",
+        },
+        {
+            "role": "user",
+            "content": "Implement the cache module.",
+        },
+    ]
+    with TestClient(app) as client:
+        resp = client.post("/v1/chat/completions", json={"messages": messages})
+        assert resp.status_code == 200
+
+    assert len(transport.recorded_bodies) == 1
+    first_content = transport.recorded_bodies[0]["messages"][0]["content"]
+
+    # Verify precedence note
+    assert (
+        "Earlier-turn constraints & facts (follow these unless the latest user message "
+        "explicitly specifies an exception or return behavior)"
+    ) in first_content
+
+    # Verify internal constraint_* keys are NOT leaked
+    assert "constraint_" not in first_content
+    assert (
+        "- DatabaseConnection must be a singleton." in first_content
+        or "- The Cache must be frozen." in first_content
+    )
+
+
+def test_middle_turn_compaction_shrinks_prompt_tokens(tmp_path: Path) -> None:
+    """Verify 5-turn conversation with distractors compacts them into episodes and shrinks prompt tokens."""
+    app, transport, cfg = _make_app(tmp_path, memory_enabled=True)
+
+    distractor_q = (
+        "Can you explain the detailed history of the Roman empire from 753 BC to the fall of Constantinople? "
+        "Also describe the culinary evolution of sourdough pizza through the Mediterranean basin in 500 words."
+    )
+    distractor_a = (
+        "The Roman civilization began as an Italic settlement dated traditionally to 753 BC. "
+        "Over centuries it expanded into an empire spanning the Mediterranean. Meanwhile, flatbread traditions "
+        "evolved with natural wild yeasts across ancient Greece and Rome."
+    )
+
+    messages = [
+        # Turn 0: User sets critical constraint
+        {"role": "user", "content": "Critical invariant: TransactionRecord must be frozen and immutable."},
+        # Turn 1: Assistant
+        {"role": "assistant", "content": "Acknowledged. I will enforce that TransactionRecord is frozen."},
+        # Turn 2: Distractor User
+        {"role": "user", "content": distractor_q},
+        # Turn 3: Distractor Assistant
+        {"role": "assistant", "content": distractor_a},
+        # Turn 4: Final User prompt
+        {"role": "user", "content": "Now implement the TransactionRecord commit method."},
+    ]
+
+    raw_chars = sum(len(m["content"]) for m in messages)
+
+    with TestClient(app) as client:
+        resp = client.post("/v1/chat/completions", json={"messages": messages})
+        assert resp.status_code == 200
+
+    assert len(transport.recorded_bodies) == 1
+    sent_messages = transport.recorded_bodies[0]["messages"]
+
+    compacted_chars = sum(len(m["content"]) for m in sent_messages)
+    assert compacted_chars < raw_chars
+
+    # Verify placeholder inserted for middle distractors
+    contents = [m["content"] for m in sent_messages]
+    assert any("[Compacted earlier turn]" in c for c in contents)
+
+    # Verify Turn 1 constraint retained
+    sys_msg = sent_messages[0]["content"]
+    assert "frozen and immutable" in sys_msg
+
+    # Verify episodes were recorded in SQLite
+    from edgemem.memory.store import MemoryStore
+
+    with MemoryStore(cfg.memory.db_path) as store:
+        st = store.stats()
+        assert st["episodes_count"] >= 2
 
 
 def test_multi_turn_constraint_injection(tmp_path: Path) -> None:
@@ -276,7 +396,6 @@ def test_mcp_memory_tools_roundtrip(tmp_path: Path) -> None:
         rem_resp = client.post("/mcp", json=rem_call, headers=headers)
         assert rem_resp.status_code == 200
         res_data = rem_resp.json()["result"]
-        # FastMCP returns content as text block
         content_text = res_data.get("content", [{}])[0].get("text", "")
         remember_out = json.loads(content_text) if content_text else res_data
         assert remember_out.get("status") == "ok"
