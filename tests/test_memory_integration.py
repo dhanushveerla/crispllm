@@ -494,3 +494,123 @@ db_path = "{db_file}"
     res_list2 = runner.invoke(cli, ["memory", "list", "--config", str(config_file)])
     assert res_list2.exit_code == 0
     assert "No facts stored." in res_list2.output
+
+
+def test_middle_turn_generic_boilerplate_is_compacted(tmp_path: Path) -> None:
+    """Test verbose middle turn with generic Python/pytest boilerplate is compacted."""
+    app, transport, _ = _make_app(tmp_path, memory_enabled=True)
+    boilerplate_turn = (
+        "```python\n"
+        "def test_helper(data: dict) -> bool:\n"
+        "    if not data:\n"
+        "        raise ValueError('invalid data')\n"
+        "    config = data.get('config', {})\n"
+        "    result = config.get('status')\n"
+        "    assert result is not None\n"
+        "    return True\n"
+        "```\n"
+        "This function tests config data items and checks output results using pytest assertions."
+    )
+    messages = [
+        {"role": "user", "content": "Rule: DatabaseConnection must be a singleton."},
+        {"role": "assistant", "content": "Acknowledged."},
+        {"role": "user", "content": boilerplate_turn},
+        {"role": "assistant", "content": "Test helper noted with assert and ValueError handling."},
+        {
+            "role": "user",
+            "content": (
+                "Write a Python class using def, ValueError, assert, result, data, and config "
+                "to implement DatabaseConnection."
+            ),
+        },
+    ]
+    with TestClient(app) as client:
+        resp = client.post("/v1/chat/completions", json={"messages": messages})
+        assert resp.status_code == 200
+
+    assert len(transport.recorded_bodies) == 1
+    sent_messages = transport.recorded_bodies[0]["messages"]
+    assert sent_messages[3]["content"] == "[Compacted earlier turn]"
+    assert sent_messages[4]["content"] == "[Compacted earlier turn]"
+    assert not any("def test_helper" in m.get("content", "") for m in sent_messages[1:])
+
+
+def test_middle_turn_domain_function_preserved(tmp_path: Path) -> None:
+    """Test middle turn defining a specific domain function called in final prompt is preserved."""
+    app, transport, _ = _make_app(tmp_path, memory_enabled=True)
+    domain_function_turn = (
+        "Here is the cryptographic helper function:\n"
+        "```python\n"
+        "def compute_merkle_root(leaf_hashes: list[str]) -> str:\n"
+        "    import hashlib\n"
+        "    current = list(leaf_hashes)\n"
+        "    while len(current) > 1:\n"
+        "        next_level = []\n"
+        "        for i in range(0, len(current), 2):\n"
+        "            left = current[i]\n"
+        "            right = current[i + 1] if i + 1 < len(current) else left\n"
+        "            next_level.append(hashlib.sha256((left + right).encode()).hexdigest())\n"
+        "        current = next_level\n"
+        "    return current[0] if current else ''\n"
+        "```"
+    )
+    messages = [
+        {"role": "user", "content": "Rule: All blocks must be cryptographically signed."},
+        {"role": "assistant", "content": "Acknowledged."},
+        {"role": "user", "content": domain_function_turn},
+        {"role": "assistant", "content": "compute_merkle_root helper registered."},
+        {
+            "role": "user",
+            "content": "Now implement BlockValidator and call compute_merkle_root to verify block transactions.",
+        },
+    ]
+    with TestClient(app) as client:
+        resp = client.post("/v1/chat/completions", json={"messages": messages})
+        assert resp.status_code == 200
+
+    assert len(transport.recorded_bodies) == 1
+    sent_messages = transport.recorded_bodies[0]["messages"]
+    assert any("def compute_merkle_root" in m.get("content", "") for m in sent_messages)
+    assert sent_messages[3]["content"] == domain_function_turn
+
+
+def test_stress_tasks_compaction_net_token_reduction() -> None:
+    """Fast unit test running MemoryMiddleware directly on all 6 stress tasks."""
+    from edgemem.memory.store import MemoryStore
+    from edgemem.proxy.middleware import MemoryMiddleware, _get_message_text, estimate_tokens
+
+    stress_tasks_file = Path(__file__).parent.parent / "bench" / "stress_tasks.json"
+    assert stress_tasks_file.exists()
+
+    with open(stress_tasks_file) as f:
+        tasks = json.load(f)
+
+    assert len(tasks) == 6
+
+    for task in tasks:
+        store = MemoryStore(":memory:")
+        config = MemoryConfig(
+            enabled=True,
+            compact_middle_turns=True,
+            keep_recent_turns=2,
+            inject_constraints=True,
+            auto_extract=True,
+        )
+        mid = MemoryMiddleware(store, config)
+
+        file_ctx = "\n".join(f"# {p}\n{c}" for p, c in task.get("files", {}).items())
+        sys_msg = "You are an expert Python developer.\n\n" + file_ctx
+        raw_messages = [{"role": "system", "content": sys_msg}] + [
+            {"role": "user", "content": turn} for turn in task["turns"]
+        ]
+        raw_tokens = sum(estimate_tokens(_get_message_text(m)) for m in raw_messages)
+
+        body = {"messages": raw_messages}
+        mod_body, tel = mid.process_request(body, {})
+        mod_tokens = sum(estimate_tokens(_get_message_text(m)) for m in mod_body["messages"])
+
+        assert tel["compacted_turns"] > 0, f"Task {task['id']} compacted 0 turns"
+        assert mod_tokens < raw_tokens, (
+            f"Task {task['id']} failed to achieve net token reduction: "
+            f"raw={raw_tokens}, mod={mod_tokens}"
+        )

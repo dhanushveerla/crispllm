@@ -137,11 +137,13 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         if (
             mem_telemetry.get("facts_extracted", 0) > 0
             or mem_telemetry.get("memory_injected_tokens", 0) > 0
+            or mem_telemetry.get("compacted_turns", 0) > 0
         ):
             logger.info(
-                "Memory middleware applied: extracted=%d facts, injected=%d tokens",
+                "Memory middleware applied: extracted=%d facts, injected=%d tokens, compacted=%d turns",
                 mem_telemetry["facts_extracted"],
                 mem_telemetry["memory_injected_tokens"],
+                mem_telemetry["compacted_turns"],
             )
 
         # Build upstream request body — keep system/tools prefix byte-identical

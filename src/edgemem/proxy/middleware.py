@@ -19,7 +19,7 @@ from edgemem.memory.store import Fact, MemoryStore
 
 logger = logging.getLogger("edgemem.proxy.memory")
 
-_STOPWORDS = {
+_STOPWORDS: frozenset[str] = frozenset({
     "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "of",
     "with", "by", "from", "up", "about", "into", "through", "after", "is", "am",
     "are", "was", "were", "be", "been", "being", "have", "has", "had", "do",
@@ -27,7 +27,24 @@ _STOPWORDS = {
     "might", "must", "it", "its", "this", "that", "these", "those", "i", "you",
     "he", "she", "we", "they", "me", "him", "her", "us", "them", "what", "which",
     "who", "whom", "how", "when", "where", "why", "now", "please", "tell",
-}
+    "all", "any", "both", "each", "few", "more", "most", "other", "some", "such",
+    "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "just",
+    "def", "class", "return", "import", "from", "self", "none", "true", "false",
+    "str", "int", "float", "bool", "dict", "list", "tuple", "set", "optional",
+    "callable", "error", "exception", "valueerror", "typeerror", "raise", "try",
+    "except", "assert", "pass", "while", "if", "else", "elif", "as",
+    "lambda", "yield", "async", "await", "init", "main", "run", "get", "set",
+    "test", "tests", "pytest", "passed", "failed", "line", "file", "module",
+    "function", "method", "value", "values", "data", "item", "items", "result",
+    "results", "output", "input", "check", "valid", "invalid", "code", "python",
+    "print", "config", "default", "name", "type", "status", "message", "info",
+    "warning", "debug", "log", "logs", "build", "step", "time", "count", "index",
+    "key", "keys", "args", "kwargs", "__init__",
+})
+
+_GENERIC_CODE_NAMES: frozenset[str] = frozenset({
+    "main", "run", "get", "set", "helper", "process", "handle", "validate", "parse",
+})
 
 
 def estimate_tokens(text: str) -> int:
@@ -53,26 +70,47 @@ def _get_message_text(msg: dict[str, Any]) -> str:
     return ""
 
 
-def _has_lexical_overlap(msg_text: str, query_text: str) -> bool:
-    """Check if message shares meaningful keywords or code identifiers with query."""
-    query_tokens = set(re.findall(r"[A-Za-z0-9_]+", query_text.lower())) - _STOPWORDS
-    if not query_tokens:
+def _is_domain_symbol(sym: str) -> bool:
+    if len(sym) < 4:
         return False
-    msg_tokens = set(re.findall(r"[A-Za-z0-9_]+", msg_text.lower())) - _STOPWORDS
-    shared = query_tokens.intersection(msg_tokens)
-    return len(shared) >= 2 or any(
-        tok in msg_tokens for tok in query_tokens if "_" in tok or tok.isupper() or len(tok) > 6
-    )
+    if sym.startswith("__") and sym.endswith("__"):
+        return False
+    if sym.lower().startswith("test_"):
+        return False
+    sym_lower = sym.lower()
+    if sym_lower in _GENERIC_CODE_NAMES or sym_lower in _STOPWORDS:
+        return False
+    return True
 
 
 def _has_code_reference(msg_text: str, query_text: str) -> bool:
-    """Check if message defines code symbols that are explicitly mentioned in query."""
     symbols = set(re.findall(r"\b(?:def|class)\s+([A-Za-z0-9_]+)", msg_text))
     symbols.update(re.findall(r"^\s*([A-Z][A-Z0-9_]{1,63})\s*=", msg_text, re.MULTILINE))
-    if not symbols:
+    domain_symbols = {sym for sym in symbols if _is_domain_symbol(sym)}
+    if not domain_symbols:
         return False
-    query_tokens = set(re.findall(r"[A-Za-z0-9_]+", query_text))
-    return bool(symbols.intersection(query_tokens))
+    query_identifiers = set(re.findall(r"\b[A-Za-z0-9_]+\b", query_text))
+    return bool(domain_symbols.intersection(query_identifiers))
+
+
+def _extract_domain_tokens(text: str) -> set[str]:
+    return {
+        tok
+        for tok in re.findall(r"[A-Za-z0-9_]+", text.lower())
+        if len(tok) >= 3
+        and tok not in _STOPWORDS
+        and not (tok.startswith("__") and tok.endswith("__"))
+    }
+
+
+def _has_lexical_overlap(msg_text: str, query_text: str) -> bool:
+    query_tokens = _extract_domain_tokens(query_text)
+    if not query_tokens:
+        return False
+    msg_tokens = _extract_domain_tokens(msg_text)
+    shared = query_tokens.intersection(msg_tokens)
+    ratio = len(shared) / len(query_tokens)
+    return len(shared) >= 3 and ratio >= 0.25
 
 
 def _format_fact_line(fact: Fact) -> str:
@@ -226,35 +264,35 @@ class MemoryMiddleware:
 
             if self.config.compact_middle_turns and len(user_indices) >= 3:
                 first_user_idx = user_indices[0]
-                # Preserve final turn and keep_recent_turns threshold
                 recent_user_threshold = (
                     user_indices[-(self.config.keep_recent_turns - 1)]
                     if self.config.keep_recent_turns > 1
                     else last_user_idx
                 )
 
-                for idx in range(first_user_idx + 2, recent_user_threshold):
+                start_idx = first_user_idx + 1
+                if start_idx < len(new_messages) and new_messages[start_idx].get("role") == "assistant":
+                    start_idx += 1
+
+                for idx in range(start_idx, recent_user_threshold):
                     m = new_messages[idx]
                     role = m.get("role")
                     if role in ("system", "tool") or "tool_calls" in m:
                         continue
 
                     text = _get_message_text(m)
-                    if not text:
+                    if not text or text == "[Compacted earlier turn]":
                         continue
 
-                    # Archive into episodes
-                    self.store.add_episode(
-                        session_id=session_id,
-                        role=role,
-                        summary=text[:300],
-                        raw_tokens=estimate_tokens(text),
-                    )
-
-                    # If off-topic distractor with low overlap and no code definitions, compact
                     if not _has_lexical_overlap(text, last_user_text) and not _has_code_reference(
                         text, last_user_text
                     ):
+                        self.store.add_episode(
+                            session_id=session_id,
+                            role=role,
+                            summary=text[:300],
+                            raw_tokens=estimate_tokens(text),
+                        )
                         new_messages[idx] = {"role": role, "content": "[Compacted earlier turn]"}
                         compacted_turns += 1
 
@@ -315,6 +353,13 @@ class MemoryMiddleware:
                     new_messages.insert(0, {"role": "system", "content": memory_block})
 
             new_body["messages"] = new_messages
+            if facts_extracted > 0 or injected_tokens > 0 or compacted_turns > 0:
+                logger.info(
+                    "Memory middleware applied: extracted=%d facts, injected=%d tokens, compacted=%d turns",
+                    facts_extracted,
+                    injected_tokens,
+                    compacted_turns,
+                )
             return new_body, {
                 "facts_extracted": facts_extracted,
                 "memory_injected_tokens": injected_tokens,
