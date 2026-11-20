@@ -671,3 +671,79 @@ class TestOutlineCacheBehavior:
         assert ("file_0.py", 1000, 50, "k0") not in cache._lru
         assert ("file_9.py", 1009, 59, "k0") in cache._lru
 
+    def test_warm_repo_map_never_loads_tiktoken(
+        self, multi_file_project: Path, tmp_path: Path, monkeypatch
+    ):
+        from edgemem.slicer import repomap
+        from edgemem.slicer.repomap import clear_graph_cache
+        import tiktoken
+
+        cache_db = tmp_path / "warm_tiktoken.db"
+        cache1 = TagCache(db_path=cache_db)
+        rm1 = RepoMap(repo_path=multi_file_project, max_tokens=1000, cache=cache1)
+        cold_map = rm1.get_repo_map()
+        assert cold_map
+        cache1.close()
+
+        clear_graph_cache()
+        repomap._ENCODINGS.clear()
+
+        def fail_get_encoding(*args, **kwargs):
+            raise AssertionError("tiktoken.get_encoding was called during warm RepoMap execution")
+
+        monkeypatch.setattr(tiktoken, "get_encoding", fail_get_encoding)
+
+        cache2 = TagCache(db_path=cache_db)
+        rm2 = RepoMap(repo_path=multi_file_project, max_tokens=1000, cache=cache2)
+        assert rm2._enc is None
+
+        warm_map = rm2.get_repo_map()
+        assert warm_map == cold_map
+        assert rm2._enc is None
+        cache2.close()
+
+    def test_find_matching_files_camel_and_snake_case_equivalence(
+        self, multi_file_project: Path
+    ):
+        from edgemem.slicer.pagerank import find_matching_files, personalise_ranks
+        from edgemem.slicer.repomap import RepoMap, extract_query_tokens
+        from edgemem.slicer.tags import extract_tags, scan_repo_files
+
+        files = scan_repo_files(multi_file_project)
+        all_tags = []
+        for f in files:
+            all_tags.extend(extract_tags(f, str(f.relative_to(multi_file_project))))
+        all_file_nodes = [str(f.relative_to(multi_file_project)) for f in files]
+
+        q_camel = "UserRecord JwtAuth"
+        q_snake = "user_record jwt_auth"
+
+        tok_camel = extract_query_tokens(q_camel)
+        tok_snake = extract_query_tokens(q_snake)
+
+        scores_camel = find_matching_files(
+            all_file_nodes, all_tags, None, None, tok_camel, query=q_camel
+        )
+        scores_snake = find_matching_files(
+            all_file_nodes, all_tags, None, None, tok_snake, query=q_snake
+        )
+
+        assert scores_camel == scores_snake
+        assert "models/user.py" in scores_camel
+        assert "auth/jwt.py" in scores_camel
+
+        base_ranks = {f: 1.0 / len(all_file_nodes) for f in all_file_nodes}
+        ranks_camel = personalise_ranks(
+            base_ranks, None, None, tok_camel, all_tags, query=q_camel, match_scores=scores_camel
+        )
+        ranks_snake = personalise_ranks(
+            base_ranks, None, None, tok_snake, all_tags, query=q_snake, match_scores=scores_snake
+        )
+        assert ranks_camel == ranks_snake
+
+        rm = RepoMap(repo_path=multi_file_project, max_tokens=1000)
+        map_camel = rm.get_repo_map(query=q_camel)
+        map_snake = rm.get_repo_map(query=q_snake)
+        assert map_camel == map_snake
+
+

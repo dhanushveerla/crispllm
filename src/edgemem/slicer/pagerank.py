@@ -7,6 +7,8 @@ Adapts Aider's RepoMap graph-building approach (Apache-2.0).
 from __future__ import annotations
 
 from collections import defaultdict
+import functools
+import re
 from typing import Iterable
 
 import networkx as nx
@@ -158,8 +160,8 @@ def is_test_file(rel_path: str) -> bool:
     return False
 
 
-def _split_identifier(ident: str) -> set[str]:
-    """Split snake_case and camelCase identifiers into lower-case subwords with simple stems."""
+@functools.lru_cache(maxsize=8192)
+def _split_identifier(ident: str) -> frozenset[str]:
     parts = re.findall(r"[A-Za-z][a-z0-9]*", ident)
     sub = set()
     for p in parts:
@@ -170,7 +172,7 @@ def _split_identifier(ident: str) -> set[str]:
                 sub.add(p_low[:-1])
             if p_low.endswith("ing") and len(p_low) > 4:
                 sub.add(p_low[:-3])
-    return sub
+    return frozenset(sub)
 
 
 def find_matching_files(
@@ -181,13 +183,8 @@ def find_matching_files(
     query_tokens: list[str] | None,
     query: str = "",
 ) -> dict[str, int]:
-    """
-    Find files matching focus_files, mentioned_symbols, or query terms.
-    Returns mapping of rel_path -> match_count.
-    """
     scores: dict[str, int] = defaultdict(int)
 
-    # 1. Direct focus_files
     if focus_files:
         for f in focus_files:
             clean_f = f.replace("\\", "/").strip()
@@ -195,29 +192,36 @@ def find_matching_files(
                 if af == clean_f or af.endswith("/" + clean_f) or clean_f in af:
                     scores[af] += 5
 
-    # 2. Query tokens / mentioned symbols matching
     target_words: set[str] = set()
+
+    def _add_word(w: str) -> None:
+        w_low = w.lower()
+        if len(w_low) > 1:
+            target_words.add(w_low)
+            clean = w_low.replace("_", "")
+            if clean != w_low and len(clean) > 1:
+                target_words.add(clean)
+            sub = _split_identifier(w)
+            target_words.update(sub)
+            parts = re.findall(r"[A-Za-z][a-z0-9]*", w)
+            if len(parts) > 1:
+                target_words.add("_".join(p.lower() for p in parts))
+
     if query:
-        raw_words = re.findall(r"[A-Za-z0-9_]+", query)
-        for w in raw_words:
-            w_low = w.lower()
-            if len(w_low) > 1:
-                target_words.add(w_low)
-                target_words.update(_split_identifier(w))
+        for w in re.findall(r"[A-Za-z0-9_]+", query):
+            _add_word(w)
     if mentioned_symbols:
         for sym in mentioned_symbols:
-            target_words.add(sym.lower())
-            target_words.update(_split_identifier(sym))
+            _add_word(sym)
     if query_tokens:
         for tok in query_tokens:
-            if len(tok) > 1:
-                target_words.add(tok.lower())
-                target_words.update(_split_identifier(tok))
+            _add_word(tok)
 
     if not target_words:
         return dict(scores)
 
-    # Match against file paths
+    long_target_words = [tw for tw in target_words if len(tw) >= 3]
+
     for f in all_files:
         path_lower = f.lower()
         path_segments = re.findall(r"[A-Za-z0-9_]+", path_lower)
@@ -226,28 +230,32 @@ def find_matching_files(
             path_subwords.add(seg)
             path_subwords.update(_split_identifier(seg))
 
-        for tw in target_words:
-            if len(tw) >= 3 and (tw in path_lower or any(tw in psw or psw in tw for psw in path_subwords)):
+        for tw in long_target_words:
+            if tw in path_lower or not path_subwords.isdisjoint(_split_identifier(tw)) or any(tw in psw or psw in tw for psw in path_subwords):
                 scores[f] += 2
 
-    # Match against defined and referenced symbols
+    file_tag_weights: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    unique_names: set[str] = set()
     for tag in tags:
-        sym_lower = tag.name.lower()
-        subwords = _split_identifier(tag.name)
-        weight = 3 if tag.kind == "def" else 1
+        file_tag_weights[tag.rel_path][tag.name] += 3 if tag.kind == "def" else 1
+        unique_names.add(tag.name)
 
-        matched = False
-        if sym_lower in target_words:
-            matched = True
-        elif any(w in target_words for w in subwords):
-            matched = True
-        elif any(tw in sym_lower for tw in target_words if len(tw) >= 3):
-            matched = True
-        elif any(any(tw in sw or sw in tw for sw in subwords) for tw in target_words if len(tw) >= 3):
-            matched = True
+    matching_names: set[str] = set()
+    for name in unique_names:
+        name_lower = name.lower()
+        subwords = _split_identifier(name)
+        if name_lower in target_words or not target_words.isdisjoint(subwords):
+            matching_names.add(name)
+        elif long_target_words:
+            if any(tw in name_lower for tw in long_target_words):
+                matching_names.add(name)
+            elif any(tw in sw or sw in tw for sw in subwords for tw in long_target_words):
+                matching_names.add(name)
 
-        if matched:
-            scores[tag.rel_path] += weight
+    for rel_path, name_weights in file_tag_weights.items():
+        for name, w in name_weights.items():
+            if name in matching_names:
+                scores[rel_path] += w
 
     return dict(scores)
 
@@ -260,18 +268,17 @@ def personalise_ranks(
     tags: Iterable[Tag],
     boost_factor: float = 5.0,
     query: str = "",
+    match_scores: dict[str, int] | None = None,
 ) -> dict[str, float]:
-    """
-    Apply focus/query boosts and test-file penalties to PageRank scores.
-    """
-    match_scores = find_matching_files(
-        all_files=list(base_ranks.keys()),
-        tags=tags,
-        focus_files=focus_files,
-        mentioned_symbols=mentioned_symbols,
-        query_tokens=query_tokens,
-        query=query,
-    )
+    if match_scores is None:
+        match_scores = find_matching_files(
+            all_files=list(base_ranks.keys()),
+            tags=tags,
+            focus_files=focus_files,
+            mentioned_symbols=mentioned_symbols,
+            query_tokens=query_tokens,
+            query=query,
+        )
 
     query_mentions_test = bool(query and "test" in query.lower())
     focus_has_test = bool(focus_files and any(is_test_file(f) for f in focus_files))
@@ -284,7 +291,6 @@ def personalise_ranks(
             m = match_scores[f]
             val = val * (1.0 + boost_factor * m)
 
-        # Down-weight test files unless query mentions "test" or focus includes test file
         if penalize_tests and is_test_file(f):
             val = val * 0.15
 

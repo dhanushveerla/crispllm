@@ -192,7 +192,7 @@ class RepoMap:
         self.model_name = model_name
         self._cache = cache or TagCache(max_outline_entries=max_outline_entries)
         self.outline_cache = outline_cache or self._cache.outline_cache
-        self._enc = _get_enc(model_name)
+        self._enc: tiktoken.Encoding | None = None
         self._cached_raw_tokens: int | None = None
 
     # ------------------------------------------------------------------
@@ -316,6 +316,7 @@ class RepoMap:
             query_tokens=query_tokens,
             tags=all_tags,
             query=query,
+            match_scores=match_scores,
         )
 
         def_tags_by_file: dict[str, list[Tag]] = {}
@@ -328,12 +329,47 @@ class RepoMap:
         effective_budget = max_tokens if max_tokens is not None else self.max_tokens
         output = self._fill_to_budget(ranked_files, def_tags_by_file, budget=effective_budget)
 
-        elapsed_ms = (time.perf_counter() - t0) * 1000
-        logger.debug(
-            "RepoMap: %d files, %d tags, %d tokens, %.1f ms",
-            len(all_files), len(all_tags), count_tokens(output), elapsed_ms,
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            logger.debug(
+                "RepoMap: %d files, %d tags, %d tokens, %.1f ms",
+                len(all_files), len(all_tags), count_tokens(output), elapsed_ms,
+            )
         return output
+
+    def _chunk_and_tokens_for_file(
+        self,
+        rel_path: str,
+        def_tags: list[Tag],
+        rank: float,
+    ) -> tuple[str, int]:
+        abs_path = self.repo_path / rel_path
+        try:
+            st = abs_path.stat()
+        except OSError:
+            return "", 0
+
+        def_lines = sorted({t.line for t in def_tags})[:10]
+        lines_key = f"lines:{','.join(map(str, def_lines))};max_lines=35"
+
+        cached = self.outline_cache.get(rel_path, st.st_mtime_ns, st.st_size, lines_key)
+        if cached is not None:
+            formatted, tok_cnt = cached
+            return f"\n{rel_path}:\n{formatted}\n", tok_cnt
+
+        try:
+            content = abs_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return "", 0
+
+        formatted = render_tree_context(rel_path, content, def_lines, max_lines=35)
+        chunk = f"\n{rel_path}:\n{formatted}\n"
+        tok_cnt = self._count(chunk)
+        self.outline_cache.put(
+            rel_path, st.st_mtime_ns, st.st_size, lines_key, formatted, tok_cnt
+        )
+
+        return chunk, tok_cnt
 
     def _chunk_for_file(
         self,
@@ -341,34 +377,12 @@ class RepoMap:
         def_tags: list[Tag],
         rank: float,
     ) -> str:
-        abs_path = self.repo_path / rel_path
-        try:
-            st = abs_path.stat()
-        except OSError:
-            return ""
-
-        def_lines = sorted({t.line for t in def_tags})[:10]
-        lines_key = f"lines:{','.join(map(str, def_lines))};max_lines=35"
-
-        cached = self.outline_cache.get(rel_path, st.st_mtime_ns, st.st_size, lines_key)
-        if cached is not None:
-            formatted, _ = cached
-            return f"\n{rel_path}:\n{formatted}\n"
-
-        try:
-            content = abs_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return ""
-
-        formatted = render_tree_context(rel_path, content, def_lines, max_lines=35)
-        tok_cnt = self._count(formatted)
-        self.outline_cache.put(
-            rel_path, st.st_mtime_ns, st.st_size, lines_key, formatted, tok_cnt
-        )
-
-        return f"\n{rel_path}:\n{formatted}\n"
+        chunk, _ = self._chunk_and_tokens_for_file(rel_path, def_tags, rank)
+        return chunk
 
     def _count(self, text: str) -> int:
+        if self._enc is None:
+            self._enc = _get_enc(self.model_name)
         return len(self._enc.encode(text, disallowed_special=()))
 
     def _fill_to_budget(
@@ -377,11 +391,6 @@ class RepoMap:
         def_tags_by_file: dict[str, list[Tag]],
         budget: int | None = None,
     ) -> str:
-        """
-        Greedily fill output chunks up to budget (or self.max_tokens).
-        Pre-renders only candidate files from the top of the ranked list,
-        avoiding TreeContext on files that will never fit into the budget.
-        """
         effective_budget = budget if budget is not None else self.max_tokens
 
         candidate_chunks: list[tuple[str, int]] = []
@@ -393,11 +402,10 @@ class RepoMap:
             if not def_tags:
                 continue
 
-            chunk = self._chunk_for_file(rel_path, def_tags, rank)
+            chunk, chunk_toks = self._chunk_and_tokens_for_file(rel_path, def_tags, rank)
             if not chunk.strip():
                 continue
 
-            chunk_toks = self._count(chunk)
             candidate_chunks.append((chunk, chunk_toks))
             accumulated += chunk_toks
             if accumulated >= max_render_budget:
