@@ -262,7 +262,15 @@ class MemoryMiddleware:
             compacted_turns = 0
             new_messages = copy.deepcopy(messages)
 
-            if self.config.compact_middle_turns and len(user_indices) >= 3:
+            total_est_tokens = sum(
+                estimate_tokens(_get_message_text(m)) for m in messages
+            )
+
+            if (
+                self.config.compact_middle_turns
+                and len(user_indices) >= 3
+                and total_est_tokens >= self.config.compact_threshold_tokens
+            ):
                 first_user_idx = user_indices[0]
                 recent_user_threshold = (
                     user_indices[-(self.config.keep_recent_turns - 1)]
@@ -274,27 +282,77 @@ class MemoryMiddleware:
                 if start_idx < len(new_messages) and new_messages[start_idx].get("role") == "assistant":
                     start_idx += 1
 
-                for idx in range(start_idx, recent_user_threshold):
+                idx = start_idx
+                while idx < recent_user_threshold:
                     m = new_messages[idx]
                     role = m.get("role")
                     if role in ("system", "tool") or "tool_calls" in m:
+                        idx += 1
                         continue
 
                     text = _get_message_text(m)
                     if not text or text == "[Compacted earlier turn]":
+                        idx += 1
                         continue
 
-                    if not _has_lexical_overlap(text, last_user_text) and not _has_code_reference(
-                        text, last_user_text
+                    is_pair = (
+                        role == "user"
+                        and idx + 1 < recent_user_threshold
+                        and new_messages[idx + 1].get("role") == "assistant"
+                        and "tool_calls" not in new_messages[idx + 1]
+                        and new_messages[idx + 1].get("content") != "[Compacted earlier turn]"
+                    )
+
+                    if is_pair:
+                        asst_m = new_messages[idx + 1]
+                        asst_text = _get_message_text(asst_m)
+                        user_rel = _has_lexical_overlap(text, last_user_text) or _has_code_reference(
+                            text, last_user_text
+                        )
+                        asst_rel = _has_lexical_overlap(asst_text, last_user_text) or _has_code_reference(
+                            asst_text, last_user_text
+                        )
+                        if user_rel or asst_rel:
+                            idx += 2
+                            continue
+
+                        pair_tokens = estimate_tokens(text) + estimate_tokens(asst_text)
+                        if pair_tokens >= self.config.compact_min_turn_tokens:
+                            self.store.add_episode(
+                                session_id=session_id,
+                                role="user",
+                                summary=text[:300],
+                                raw_tokens=estimate_tokens(text),
+                            )
+                            self.store.add_episode(
+                                session_id=session_id,
+                                role="assistant",
+                                summary=asst_text[:300],
+                                raw_tokens=estimate_tokens(asst_text),
+                            )
+                            new_messages[idx] = {"role": "user", "content": "[Compacted earlier turn]"}
+                            new_messages[idx + 1] = {"role": "assistant", "content": "[Compacted earlier turn]"}
+                            compacted_turns += 2
+
+                        idx += 2
+                        continue
+
+                    turn_tokens = estimate_tokens(text)
+                    if (
+                        turn_tokens >= self.config.compact_min_turn_tokens
+                        and not _has_lexical_overlap(text, last_user_text)
+                        and not _has_code_reference(text, last_user_text)
                     ):
                         self.store.add_episode(
                             session_id=session_id,
                             role=role,
                             summary=text[:300],
-                            raw_tokens=estimate_tokens(text),
+                            raw_tokens=turn_tokens,
                         )
                         new_messages[idx] = {"role": role, "content": "[Compacted earlier turn]"}
                         compacted_turns += 1
+
+                    idx += 1
 
             # 4. Format active memory block and enforce token budget
             memory_block = ""
@@ -353,13 +411,6 @@ class MemoryMiddleware:
                     new_messages.insert(0, {"role": "system", "content": memory_block})
 
             new_body["messages"] = new_messages
-            if facts_extracted > 0 or injected_tokens > 0 or compacted_turns > 0:
-                logger.info(
-                    "Memory middleware applied: extracted=%d facts, injected=%d tokens, compacted=%d turns",
-                    facts_extracted,
-                    injected_tokens,
-                    compacted_turns,
-                )
             return new_body, {
                 "facts_extracted": facts_extracted,
                 "memory_injected_tokens": injected_tokens,

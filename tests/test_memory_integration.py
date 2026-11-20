@@ -52,7 +52,13 @@ class MockTransport(httpx.AsyncBaseTransport):
         )
 
 
-def _make_app(tmp_path: Path, memory_enabled: bool = True, max_tokens: int = 384):
+def _make_app(
+    tmp_path: Path,
+    memory_enabled: bool = True,
+    max_tokens: int = 384,
+    compact_threshold_tokens: int = 2000,
+    compact_min_turn_tokens: int = 150,
+):
     db_file = tmp_path / "test_memory.db"
     cfg = EdgeMemConfig(
         host="127.0.0.1",
@@ -66,6 +72,8 @@ def _make_app(tmp_path: Path, memory_enabled: bool = True, max_tokens: int = 384
             inject_constraints=True,
             auto_extract=True,
             compact_middle_turns=True,
+            compact_threshold_tokens=compact_threshold_tokens,
+            compact_min_turn_tokens=compact_min_turn_tokens,
             keep_recent_turns=2,
             db_path=str(db_file),
         ),
@@ -153,7 +161,12 @@ def test_clean_formatting_and_precedence_note(tmp_path: Path) -> None:
 
 def test_middle_turn_compaction_shrinks_prompt_tokens(tmp_path: Path) -> None:
     """Verify 5-turn conversation with distractors compacts them into episodes and shrinks prompt tokens."""
-    app, transport, cfg = _make_app(tmp_path, memory_enabled=True)
+    app, transport, cfg = _make_app(
+        tmp_path,
+        memory_enabled=True,
+        compact_threshold_tokens=0,
+        compact_min_turn_tokens=0,
+    )
 
     distractor_q = (
         "Can you explain the detailed history of the Roman empire from 753 BC to the fall of Constantinople? "
@@ -498,7 +511,12 @@ db_path = "{db_file}"
 
 def test_middle_turn_generic_boilerplate_is_compacted(tmp_path: Path) -> None:
     """Test verbose middle turn with generic Python/pytest boilerplate is compacted."""
-    app, transport, _ = _make_app(tmp_path, memory_enabled=True)
+    app, transport, _ = _make_app(
+        tmp_path,
+        memory_enabled=True,
+        compact_threshold_tokens=0,
+        compact_min_turn_tokens=0,
+    )
     boilerplate_turn = (
         "```python\n"
         "def test_helper(data: dict) -> bool:\n"
@@ -537,7 +555,12 @@ def test_middle_turn_generic_boilerplate_is_compacted(tmp_path: Path) -> None:
 
 def test_middle_turn_domain_function_preserved(tmp_path: Path) -> None:
     """Test middle turn defining a specific domain function called in final prompt is preserved."""
-    app, transport, _ = _make_app(tmp_path, memory_enabled=True)
+    app, transport, _ = _make_app(
+        tmp_path,
+        memory_enabled=True,
+        compact_threshold_tokens=0,
+        compact_min_turn_tokens=0,
+    )
     domain_function_turn = (
         "Here is the cryptographic helper function:\n"
         "```python\n"
@@ -572,6 +595,41 @@ def test_middle_turn_domain_function_preserved(tmp_path: Path) -> None:
     sent_messages = transport.recorded_bodies[0]["messages"]
     assert any("def compute_merkle_root" in m.get("content", "") for m in sent_messages)
     assert sent_messages[3]["content"] == domain_function_turn
+
+
+def test_short_conversation_default_config_skips_compaction(tmp_path: Path) -> None:
+    """Test short conversation with default MemoryConfig compacts 0 turns but extracts constraints."""
+    app, transport, _ = _make_app(tmp_path, memory_enabled=True)
+    messages = [
+        {"role": "user", "content": "Rule: TransactionRecord must be strictly immutable and frozen."},
+        {"role": "assistant", "content": "Acknowledged. TransactionRecord will be immutable."},
+        {
+            "role": "user",
+            "content": "Please also add a string helper method to sanitize user inputs before logging.",
+        },
+        {
+            "role": "assistant",
+            "content": "Added sanitize_input helper method.",
+        },
+        {
+            "role": "user",
+            "content": "Now implement TransactionRecord and ensure it respects the Turn 1 rule.",
+        },
+    ]
+    with TestClient(app) as client:
+        resp = client.post("/v1/chat/completions", json={"messages": messages})
+        assert resp.status_code == 200
+
+    assert len(transport.recorded_bodies) == 1
+    sent_messages = transport.recorded_bodies[0]["messages"]
+
+    assert not any("[Compacted earlier turn]" in m.get("content", "") for m in sent_messages)
+    assert any("sanitize user inputs" in m.get("content", "") for m in sent_messages)
+    assert any("Added sanitize_input" in m.get("content", "") for m in sent_messages)
+
+    first_content = sent_messages[0]["content"]
+    assert "[EdgeMem Active Memory]" in first_content
+    assert "strictly immutable and frozen" in first_content
 
 
 def test_stress_tasks_compaction_net_token_reduction() -> None:

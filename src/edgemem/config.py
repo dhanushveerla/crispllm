@@ -33,6 +33,8 @@ class MemoryConfig:
     inject_constraints: bool = True
     auto_extract: bool = True
     compact_middle_turns: bool = True
+    compact_threshold_tokens: int = 2000
+    compact_min_turn_tokens: int = 150
     keep_recent_turns: int = 2
     db_path: str | None = None
 
@@ -117,6 +119,12 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         compact_middle_turns=memory.get(
             "compact_middle_turns", MemoryConfig.compact_middle_turns
         ),
+        compact_threshold_tokens=memory.get(
+            "compact_threshold_tokens", MemoryConfig.compact_threshold_tokens
+        ),
+        compact_min_turn_tokens=memory.get(
+            "compact_min_turn_tokens", MemoryConfig.compact_min_turn_tokens
+        ),
         keep_recent_turns=memory.get(
             "keep_recent_turns", MemoryConfig.keep_recent_turns
         ),
@@ -164,6 +172,8 @@ max_injected_tokens = 384
 inject_constraints = true
 auto_extract = true
 compact_middle_turns = true
+compact_threshold_tokens = 2000
+compact_min_turn_tokens = 150
 keep_recent_turns = 2
 # db_path = "/custom/memory.db"  # defaults to platformdirs user_data_dir("edgemem") / "memory.db"
 """
