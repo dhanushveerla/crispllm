@@ -1,0 +1,356 @@
+[
+  {
+    "id": "ef_01",
+    "category": "exact_fact",
+    "description": "Implement a missing function whose signature and return contract are defined in a sibling module.",
+    "files": {
+      "mylib/constants.py": "# DO NOT MODIFY THIS FILE\nERR_NOT_FOUND = 404\nERR_CONFLICT  = 409\nERR_SERVER    = 500\nMAX_RETRIES   = 3\n",
+      "mylib/base.py": "# DO NOT MODIFY THIS FILE\nfrom typing import Optional\n\nclass ApiResponse:\n    def __init__(self, status: int, body: Optional[str] = None):\n        self.status = status\n        self.body = body\n\n    def ok(self) -> bool:\n        return self.status < 400\n",
+      "mylib/client.py": "from mylib.constants import ERR_NOT_FOUND, ERR_CONFLICT, ERR_SERVER, MAX_RETRIES\nfrom mylib.base import ApiResponse\n\ndef fetch_with_retry(url: str, retries: int = MAX_RETRIES) -> ApiResponse:\n    \"\"\"Simulate fetching url. Raise ValueError if retries < 0.\n    Return ApiResponse(ERR_NOT_FOUND) for unknown URLs.\n    Return ApiResponse(200, 'ok') for 'http://good'.\n    Return ApiResponse(ERR_CONFLICT) for 'http://conflict'.\n    DO NOT implement this yet \u2014 it is intentionally left empty.\"\"\"\n    pass\n"
+    },
+    "turns": [
+      "Implement `fetch_with_retry` in `mylib/client.py`. Use the exact constants and classes from `mylib/constants.py` and `mylib/base.py`. Do not change any other file."
+    ],
+    "reference_solution": {
+      "mylib/client.py": "from mylib.constants import ERR_NOT_FOUND, ERR_CONFLICT, ERR_SERVER, MAX_RETRIES\nfrom mylib.base import ApiResponse\n\ndef fetch_with_retry(url: str, retries: int = MAX_RETRIES) -> ApiResponse:\n    if retries < 0:\n        raise ValueError(\"retries must be >= 0\")\n    if url == 'http://good':\n        return ApiResponse(200, 'ok')\n    if url == 'http://conflict':\n        return ApiResponse(ERR_CONFLICT)\n    return ApiResponse(ERR_NOT_FOUND)\n"
+    },
+    "test_code": "import sys, os, importlib, types\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['mylib.constants','mylib.base','mylib.client']:\n        if mod in sys.modules: del sys.modules[mod]\n    import mylib.client as m\n    return m\n\ndef test_fetch_with_retry(sol_dir='.'):\n    m = load_solution(sol_dir)\n    r = m.fetch_with_retry('http://good')\n    assert r.status == 200 and r.body == 'ok', f'good URL: {r.status}'\n    r2 = m.fetch_with_retry('http://conflict')\n    assert r2.status == 409, f'conflict: {r2.status}'\n    r3 = m.fetch_with_retry('http://unknown')\n    assert r3.status == 404, f'unknown: {r3.status}'\n    try:\n        m.fetch_with_retry('http://x', retries=-1)\n        assert False, 'should raise'\n    except ValueError:\n        pass\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_fetch_with_retry(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ef_02",
+    "category": "exact_fact",
+    "description": "Fix a bug in a serializer that must match the exact field order and type aliases defined in the schema module.",
+    "files": {
+      "schema.py": "# Canonical field ordering and type aliases \u2014 DO NOT MODIFY\nfrom typing import TypeAlias\n\nUserId: TypeAlias = int\nTimestamp: TypeAlias = str   # ISO-8601\n\nFIELD_ORDER = ['user_id', 'timestamp', 'action', 'payload']\n",
+      "serializer.py": "\"\"\"BUG: serialize() outputs fields in insertion order instead of FIELD_ORDER.\nFix it so the returned dict always follows schema.FIELD_ORDER.\"\"\"\nfrom schema import FIELD_ORDER, UserId, Timestamp\nfrom typing import Any\n\ndef serialize(user_id: UserId, timestamp: Timestamp, action: str, payload: Any) -> dict:\n    # BUG: wrong order\n    return {'action': action, 'payload': payload, 'user_id': user_id, 'timestamp': timestamp}\n"
+    },
+    "turns": [
+      "Fix the bug in `serializer.py` so `serialize()` returns a dict whose keys appear in the exact order defined by `schema.FIELD_ORDER`. Do not modify `schema.py`."
+    ],
+    "reference_solution": {
+      "serializer.py": "from schema import FIELD_ORDER, UserId, Timestamp\nfrom typing import Any\n\ndef serialize(user_id: UserId, timestamp: Timestamp, action: str, payload: Any) -> dict:\n    raw = {'user_id': user_id, 'timestamp': timestamp, 'action': action, 'payload': payload}\n    return {k: raw[k] for k in FIELD_ORDER}\n"
+    },
+    "test_code": "import sys, importlib\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['schema', 'serializer']:\n        if mod in sys.modules: del sys.modules[mod]\n    import serializer as m\n    return m\n\ndef test_field_order(sol_dir='.'):\n    m = load_solution(sol_dir)\n    result = m.serialize(1, '2024-01-01T00:00:00Z', 'click', {'x': 1})\n    keys = list(result.keys())\n    assert keys == ['user_id', 'timestamp', 'action', 'payload'], f'wrong order: {keys}'\n    assert result['user_id'] == 1\n    assert result['action'] == 'click'\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_field_order(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ef_03",
+    "category": "exact_fact",
+    "description": "Implement a registry lookup that must use the exact string keys defined in a constants file.",
+    "files": {
+      "registry_keys.py": "# Canonical plugin keys \u2014 DO NOT MODIFY\nPLUGIN_PARSER  = 'plugin:parser:v1'\nPLUGIN_RENDER  = 'plugin:render:v1'\nPLUGIN_EXPORT  = 'plugin:export:v1'\nPLUGIN_UNKNOWN = 'plugin:unknown'\n",
+      "registry.py": "\"\"\"Implement get_plugin so it returns the canonical key string for known\nplugin names ('parser', 'render', 'export') or PLUGIN_UNKNOWN otherwise.\nImport keys from registry_keys.py \u2014 do NOT hardcode string literals.\"\"\"\nfrom registry_keys import PLUGIN_PARSER, PLUGIN_RENDER, PLUGIN_EXPORT, PLUGIN_UNKNOWN\n\ndef get_plugin(name: str) -> str:\n    pass\n"
+    },
+    "turns": [
+      "Implement `get_plugin` in `registry.py` using the exact constants from `registry_keys.py`. Map `'parser'` \u2192 `PLUGIN_PARSER`, `'render'` \u2192 `PLUGIN_RENDER`, `'export'` \u2192 `PLUGIN_EXPORT`, anything else \u2192 `PLUGIN_UNKNOWN`."
+    ],
+    "reference_solution": {
+      "registry.py": "from registry_keys import PLUGIN_PARSER, PLUGIN_RENDER, PLUGIN_EXPORT, PLUGIN_UNKNOWN\n\n_MAP = {'parser': PLUGIN_PARSER, 'render': PLUGIN_RENDER, 'export': PLUGIN_EXPORT}\n\ndef get_plugin(name: str) -> str:\n    return _MAP.get(name, PLUGIN_UNKNOWN)\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['registry_keys', 'registry']:\n        if mod in sys.modules: del sys.modules[mod]\n    import registry as m\n    return m\n\ndef test_get_plugin(sol_dir='.'):\n    m = load_solution(sol_dir)\n    assert m.get_plugin('parser')  == 'plugin:parser:v1', m.get_plugin('parser')\n    assert m.get_plugin('render')  == 'plugin:render:v1', m.get_plugin('render')\n    assert m.get_plugin('export')  == 'plugin:export:v1', m.get_plugin('export')\n    assert m.get_plugin('foobar')  == 'plugin:unknown',   m.get_plugin('foobar')\n    assert m.get_plugin('')        == 'plugin:unknown'\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_get_plugin(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ef_04",
+    "category": "exact_fact",
+    "description": "Complete a parser that must call an internal tokenizer with the exact signature defined in tokenizer.py.",
+    "files": {
+      "tokenizer.py": "# DO NOT MODIFY\nfrom typing import List, Tuple\n\nTokenType = str  # 'NUM' | 'OP' | 'LPAREN' | 'RPAREN' | 'EOF'\n\ndef tokenize(source: str, strip_whitespace: bool = True) -> List[Tuple[TokenType, str]]:\n    \"\"\"Toy tokenizer. Returns list of (token_type, lexeme) pairs.\"\"\"\n    import re\n    tokens: List[Tuple[str,str]] = []\n    pos = 0\n    while pos < len(source):\n        if strip_whitespace and source[pos].isspace():\n            pos += 1; continue\n        m = re.match(r'\\d+', source[pos:])\n        if m:\n            tokens.append(('NUM', m.group())); pos += len(m.group()); continue\n        if source[pos] in '+-*/':\n            tokens.append(('OP', source[pos])); pos += 1; continue\n        if source[pos] == '(':\n            tokens.append(('LPAREN', '(')); pos += 1; continue\n        if source[pos] == ')':\n            tokens.append(('RPAREN', ')')); pos += 1; continue\n        pos += 1\n    tokens.append(('EOF', ''))\n    return tokens\n",
+      "parser.py": "\"\"\"Implement count_ops(source) using tokenizer.tokenize.\nMust call tokenize with strip_whitespace=True (the default).\nReturns the count of 'OP' tokens in the token stream.\"\"\"\nfrom tokenizer import tokenize, TokenType\nfrom typing import List, Tuple\n\ndef count_ops(source: str) -> int:\n    pass\n"
+    },
+    "turns": [
+      "Implement `count_ops` in `parser.py`. Use `tokenize` from `tokenizer.py` with its exact signature. Count and return the number of `'OP'` tokens. Do not reimplement tokenization logic."
+    ],
+    "reference_solution": {
+      "parser.py": "from tokenizer import tokenize, TokenType\nfrom typing import List, Tuple\n\ndef count_ops(source: str) -> int:\n    tokens = tokenize(source, strip_whitespace=True)\n    return sum(1 for tok_type, _ in tokens if tok_type == 'OP')\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['tokenizer', 'parser']:\n        if mod in sys.modules: del sys.modules[mod]\n    import parser as m\n    return m\n\ndef test_count_ops(sol_dir='.'):\n    m = load_solution(sol_dir)\n    assert m.count_ops('1 + 2 * 3') == 2, m.count_ops('1 + 2 * 3')\n    assert m.count_ops('(10 - 4) / 2') == 2\n    assert m.count_ops('42') == 0\n    assert m.count_ops('1+2+3+4') == 3\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_count_ops(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ef_05",
+    "category": "exact_fact",
+    "description": "Fix a cross-file type mismatch: a function returns the wrong type alias defined in types.py.",
+    "files": {
+      "types.py": "# Canonical type aliases \u2014 DO NOT MODIFY\nfrom typing import TypedDict, List\n\nclass Point(TypedDict):\n    x: float\n    y: float\n\nclass Polygon(TypedDict):\n    vertices: List[Point]\n    closed: bool\n",
+      "geometry.py": "\"\"\"BUG: make_square returns a plain list instead of a Polygon TypedDict.\nFix it to return the exact Polygon structure from types.py.\"\"\"\nfrom types_ import Point, Polygon  # note: file is types.py but imported as types_\nfrom typing import List\n\ndef make_square(side: float) -> Polygon:\n    # BUG: returns wrong structure\n    return [{'x': 0.0, 'y': 0.0}, {'x': side, 'y': 0.0},\n            {'x': side, 'y': side}, {'x': 0.0, 'y': side}]  # type: ignore\n",
+      "types_.py": "# Canonical type aliases \u2014 DO NOT MODIFY (this is types.py exposed as types_)\nfrom typing import TypedDict, List\n\nclass Point(TypedDict):\n    x: float\n    y: float\n\nclass Polygon(TypedDict):\n    vertices: List[Point]\n    closed: bool\n"
+    },
+    "turns": [
+      "Fix `make_square` in `geometry.py` so it returns a proper `Polygon` dict (with `vertices` list of `Point` dicts and `closed: bool`) as defined in `types_.py`. The square has corners at (0,0), (side,0), (side,side), (0,side) and is closed."
+    ],
+    "reference_solution": {
+      "geometry.py": "from types_ import Point, Polygon\nfrom typing import List\n\ndef make_square(side: float) -> Polygon:\n    vertices: List[Point] = [\n        {'x': 0.0,  'y': 0.0},\n        {'x': side, 'y': 0.0},\n        {'x': side, 'y': side},\n        {'x': 0.0,  'y': side},\n    ]\n    return Polygon(vertices=vertices, closed=True)\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['types_', 'geometry']:\n        if mod in sys.modules: del sys.modules[mod]\n    import geometry as m\n    return m\n\ndef test_make_square(sol_dir='.'):\n    m = load_solution(sol_dir)\n    sq = m.make_square(4.0)\n    assert isinstance(sq, dict), f'expected dict, got {type(sq)}'\n    assert 'vertices' in sq and 'closed' in sq, f'missing keys: {sq.keys()}'\n    assert sq['closed'] is True\n    verts = sq['vertices']\n    assert len(verts) == 4, f'expected 4 vertices, got {len(verts)}'\n    assert {'x': 0.0, 'y': 0.0} in verts\n    assert {'x': 4.0, 'y': 0.0} in verts\n    assert {'x': 4.0, 'y': 4.0} in verts\n    assert {'x': 0.0, 'y': 4.0} in verts\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_make_square(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ef_06",
+    "category": "exact_fact",
+    "description": "Implement a cache decorator that must respect an exact TTL constant and a named exception from exceptions.py.",
+    "files": {
+      "exceptions.py": "# DO NOT MODIFY\nclass CacheExpiredError(Exception):\n    \"\"\"Raised when a cached entry has expired.\"\"\"\n    pass\n\nclass CacheMissError(Exception):\n    \"\"\"Raised when a key is not in cache.\"\"\"\n    pass\n",
+      "cache.py": "\"\"\"Implement SimpleCache with get/set/delete.\n- TTL_SECONDS = 60 (use this exact name)\n- get() raises CacheMissError if key absent, CacheExpiredError if expired.\n- set() stores value with current timestamp.\n- delete() removes key silently (no error if missing).\n\"\"\"\nfrom exceptions import CacheMissError, CacheExpiredError\nimport time\n\nTTL_SECONDS = 60\n\nclass SimpleCache:\n    def __init__(self):\n        self._store: dict = {}\n\n    def get(self, key: str):\n        pass\n\n    def set(self, key: str, value) -> None:\n        pass\n\n    def delete(self, key: str) -> None:\n        pass\n"
+    },
+    "turns": [
+      "Implement the three methods of `SimpleCache` in `cache.py`. Use `CacheMissError` and `CacheExpiredError` from `exceptions.py` and the `TTL_SECONDS = 60` constant already defined. Do not change any constant or import."
+    ],
+    "reference_solution": {
+      "cache.py": "from exceptions import CacheMissError, CacheExpiredError\nimport time\n\nTTL_SECONDS = 60\n\nclass SimpleCache:\n    def __init__(self):\n        self._store: dict = {}\n\n    def get(self, key: str):\n        if key not in self._store:\n            raise CacheMissError(key)\n        value, ts = self._store[key]\n        if time.time() - ts > TTL_SECONDS:\n            raise CacheExpiredError(key)\n        return value\n\n    def set(self, key: str, value) -> None:\n        self._store[key] = (value, time.time())\n\n    def delete(self, key: str) -> None:\n        self._store.pop(key, None)\n"
+    },
+    "test_code": "import sys, time\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['exceptions', 'cache']:\n        if mod in sys.modules: del sys.modules[mod]\n    import cache as m\n    return m\n\ndef test_simple_cache(sol_dir='.'):\n    m = load_solution(sol_dir)\n    c = m.SimpleCache()\n    # miss\n    try:\n        c.get('x')\n        assert False, 'should raise CacheMissError'\n    except m.SimpleCache.__class__.__mro__[0].__class__.__mro__[0].__class__.__mro__[0].__class__:\n        pass\n    except Exception as e:\n        # accept any exception named CacheMissError\n        assert 'CacheMiss' in type(e).__name__ or 'Miss' in type(e).__name__, f'wrong exc: {type(e)}'\n    # set/get\n    c.set('k', 42)\n    assert c.get('k') == 42\n    # delete\n    c.delete('k')\n    raised = False\n    try:\n        c.get('k')\n    except Exception:\n        raised = True\n    assert raised, 'should raise after delete'\n    # delete missing silently\n    c.delete('nonexistent')\n\ndef test_simple_cache_v2(sol_dir='.'):\n    sys.path.insert(0, sol_dir)\n    for mod in ['exceptions', 'cache']:\n        if mod in sys.modules: del sys.modules[mod]\n    import cache as m\n    import exceptions as exc\n    c = m.SimpleCache()\n    try:\n        c.get('missing')\n    except exc.CacheMissError:\n        pass\n    c.set('a', 'hello')\n    assert c.get('a') == 'hello'\n    c.delete('a')\n    try:\n        c.get('a')\n    except exc.CacheMissError:\n        pass\n    c.delete('nope')  # silent\n    assert m.TTL_SECONDS == 60\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_simple_cache_v2(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ef_07",
+    "category": "exact_fact",
+    "description": "Implement a function that must produce the exact event-name strings defined in events.py.",
+    "files": {
+      "events.py": "# Canonical event names \u2014 DO NOT MODIFY\nEVT_USER_CREATED  = 'user.created'\nEVT_USER_DELETED  = 'user.deleted'\nEVT_POST_CREATED  = 'post.created'\nEVT_POST_DELETED  = 'post.deleted'\nEVT_COMMENT_ADDED = 'comment.added'\n",
+      "emitter.py": "\"\"\"Implement build_event(entity, action) -> str.\nMust return exact event strings from events.py for known (entity, action) combos.\nFor unknown combos raise ValueError.\"\"\"\nfrom events import EVT_USER_CREATED, EVT_USER_DELETED, EVT_POST_CREATED, EVT_POST_DELETED, EVT_COMMENT_ADDED\n\ndef build_event(entity: str, action: str) -> str:\n    pass\n"
+    },
+    "turns": [
+      "Implement `build_event(entity, action)` in `emitter.py`. Map ('user','created')\u2192`EVT_USER_CREATED`, ('user','deleted')\u2192`EVT_USER_DELETED`, ('post','created')\u2192`EVT_POST_CREATED`, ('post','deleted')\u2192`EVT_POST_DELETED`, ('comment','added')\u2192`EVT_COMMENT_ADDED`. Raise `ValueError` for unknown combinations. Use the imported constants, not string literals."
+    ],
+    "reference_solution": {
+      "emitter.py": "from events import EVT_USER_CREATED, EVT_USER_DELETED, EVT_POST_CREATED, EVT_POST_DELETED, EVT_COMMENT_ADDED\n\n_MAP = {\n    ('user',    'created'): EVT_USER_CREATED,\n    ('user',    'deleted'): EVT_USER_DELETED,\n    ('post',    'created'): EVT_POST_CREATED,\n    ('post',    'deleted'): EVT_POST_DELETED,\n    ('comment', 'added'):   EVT_COMMENT_ADDED,\n}\n\ndef build_event(entity: str, action: str) -> str:\n    key = (entity, action)\n    if key not in _MAP:\n        raise ValueError(f'Unknown event: {entity}.{action}')\n    return _MAP[key]\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['events', 'emitter']:\n        if mod in sys.modules: del sys.modules[mod]\n    import emitter as m\n    return m\n\ndef test_build_event(sol_dir='.'):\n    m = load_solution(sol_dir)\n    assert m.build_event('user',    'created') == 'user.created'\n    assert m.build_event('user',    'deleted') == 'user.deleted'\n    assert m.build_event('post',    'created') == 'post.created'\n    assert m.build_event('post',    'deleted') == 'post.deleted'\n    assert m.build_event('comment', 'added')   == 'comment.added'\n    try:\n        m.build_event('order', 'placed')\n        assert False, 'should raise ValueError'\n    except ValueError:\n        pass\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_build_event(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ef_08",
+    "category": "exact_fact",
+    "description": "Fix a function that computes a hash key with the wrong separator, breaking cross-file contract.",
+    "files": {
+      "contract.py": "# Canonical key format \u2014 DO NOT MODIFY\n# Key format: '{namespace}::{resource}::{version}'\nKEY_SEPARATOR = '::'\nKEY_VERSION   = 'v1'\n",
+      "keygen.py": "\"\"\"BUG: make_key uses '-' as separator instead of contract.KEY_SEPARATOR.\nFix it to match the contract exactly.\"\"\"\nfrom contract import KEY_SEPARATOR, KEY_VERSION\n\ndef make_key(namespace: str, resource: str) -> str:\n    # BUG: wrong separator\n    return f'{namespace}-{resource}-{KEY_VERSION}'\n"
+    },
+    "turns": [
+      "Fix `make_key` in `keygen.py` to use `KEY_SEPARATOR` and `KEY_VERSION` from `contract.py` correctly. The output format must be `'{namespace}{sep}{resource}{sep}{version}'` where sep=`KEY_SEPARATOR` and version=`KEY_VERSION`."
+    ],
+    "reference_solution": {
+      "keygen.py": "from contract import KEY_SEPARATOR, KEY_VERSION\n\ndef make_key(namespace: str, resource: str) -> str:\n    return f'{namespace}{KEY_SEPARATOR}{resource}{KEY_SEPARATOR}{KEY_VERSION}'\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['contract', 'keygen']:\n        if mod in sys.modules: del sys.modules[mod]\n    import keygen as m\n    return m\n\ndef test_make_key(sol_dir='.'):\n    m = load_solution(sol_dir)\n    assert m.make_key('auth', 'user')   == 'auth::user::v1',   m.make_key('auth','user')\n    assert m.make_key('data', 'record') == 'data::record::v1', m.make_key('data','record')\n    assert m.make_key('x',   'y')       == 'x::y::v1'\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_make_key(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ef_09",
+    "category": "exact_fact",
+    "description": "Implement a validator using exact regex patterns and limit constants from a shared config module.",
+    "files": {
+      "config.py": "# DO NOT MODIFY\nimport re\nUSERNAME_PATTERN = re.compile(r'^[a-z][a-z0-9_]{2,19}$')\nEMAIL_PATTERN    = re.compile(r'^[^@]+@[^@]+\\.[^@]+$')\nMIN_PASSWORD_LEN = 8\nMAX_PASSWORD_LEN = 128\n",
+      "validator.py": "\"\"\"Implement validate_user(username, email, password) -> dict.\nReturn {'username': bool, 'email': bool, 'password': bool}.\nUse patterns and limits from config.py exactly.\"\"\"\nfrom config import USERNAME_PATTERN, EMAIL_PATTERN, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN\n\ndef validate_user(username: str, email: str, password: str) -> dict:\n    pass\n"
+    },
+    "turns": [
+      "Implement `validate_user` in `validator.py`. Use `USERNAME_PATTERN`, `EMAIL_PATTERN`, `MIN_PASSWORD_LEN`, `MAX_PASSWORD_LEN` from `config.py`. Return a dict `{'username': bool, 'email': bool, 'password': bool}` where each bool is True if that field is valid."
+    ],
+    "reference_solution": {
+      "validator.py": "from config import USERNAME_PATTERN, EMAIL_PATTERN, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN\n\ndef validate_user(username: str, email: str, password: str) -> dict:\n    return {\n        'username': bool(USERNAME_PATTERN.match(username)),\n        'email':    bool(EMAIL_PATTERN.match(email)),\n        'password': MIN_PASSWORD_LEN <= len(password) <= MAX_PASSWORD_LEN,\n    }\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['config', 'validator']:\n        if mod in sys.modules: del sys.modules[mod]\n    import validator as m\n    return m\n\ndef test_validate_user(sol_dir='.'):\n    m = load_solution(sol_dir)\n    r = m.validate_user('alice01', 'a@b.com', 'secure123')\n    assert r['username'] is True,  f\"alice01 should pass: {r}\"\n    assert r['email']    is True,  f\"email should pass: {r}\"\n    assert r['password'] is True,  f\"password should pass: {r}\"\n\n    r2 = m.validate_user('A', 'notanemail', 'short')\n    assert r2['username'] is False\n    assert r2['email']    is False\n    assert r2['password'] is False\n\n    r3 = m.validate_user('ab', 'x@y.z', 'a' * 129)\n    assert r3['password'] is False, 'too long'\n\n    r4 = m.validate_user('abc', 'x@y.z', 'a' * 8)\n    assert r4['password'] is True, 'exactly 8'\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_validate_user(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ef_10",
+    "category": "exact_fact",
+    "description": "Complete a state machine that must transition using the exact state names and allowed-transitions map defined in states.py.",
+    "files": {
+      "states.py": "# DO NOT MODIFY\nSTATE_IDLE      = 'idle'\nSTATE_RUNNING   = 'running'\nSTATE_PAUSED    = 'paused'\nSTATE_DONE      = 'done'\nSTATE_ERROR     = 'error'\n\nALLOWED_TRANSITIONS = {\n    'idle':    {'running'},\n    'running': {'paused', 'done', 'error'},\n    'paused':  {'running', 'error'},\n    'done':    set(),\n    'error':   set(),\n}\n",
+      "fsm.py": "\"\"\"Implement StateMachine.transition(next_state).\nRaises ValueError if transition not in ALLOWED_TRANSITIONS.\nUse exact state constants from states.py.\"\"\"\nfrom states import STATE_IDLE, ALLOWED_TRANSITIONS\n\nclass StateMachine:\n    def __init__(self):\n        self.state: str = STATE_IDLE\n\n    def transition(self, next_state: str) -> None:\n        pass\n"
+    },
+    "turns": [
+      "Implement `transition` in `fsm.py`. It must look up the current state in `ALLOWED_TRANSITIONS` from `states.py` and raise `ValueError` if `next_state` is not in the allowed set. Otherwise update `self.state`."
+    ],
+    "reference_solution": {
+      "fsm.py": "from states import STATE_IDLE, ALLOWED_TRANSITIONS\n\nclass StateMachine:\n    def __init__(self):\n        self.state: str = STATE_IDLE\n\n    def transition(self, next_state: str) -> None:\n        allowed = ALLOWED_TRANSITIONS.get(self.state, set())\n        if next_state not in allowed:\n            raise ValueError(f'Cannot transition from {self.state!r} to {next_state!r}')\n        self.state = next_state\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['states', 'fsm']:\n        if mod in sys.modules: del sys.modules[mod]\n    import fsm as m\n    return m\n\ndef test_state_machine(sol_dir='.'):\n    m = load_solution(sol_dir)\n    sm = m.StateMachine()\n    assert sm.state == 'idle'\n    sm.transition('running')\n    assert sm.state == 'running'\n    sm.transition('paused')\n    assert sm.state == 'paused'\n    sm.transition('running')\n    assert sm.state == 'running'\n    sm.transition('done')\n    assert sm.state == 'done'\n    # terminal state\n    try:\n        sm.transition('idle')\n        assert False, 'should raise'\n    except ValueError:\n        pass\n    # invalid from idle\n    sm2 = m.StateMachine()\n    try:\n        sm2.transition('done')\n        assert False\n    except ValueError:\n        pass\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_state_machine(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ct_01",
+    "category": "continuity",
+    "description": "Multi-turn: a custom Token dataclass with frozen=True and a strict budget_tokens: int field must be preserved across distractor turns.",
+    "files": {
+      "token_model.py": "# Shared types \u2014 model must keep these in context\nfrom dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass Token:\n    text: str\n    token_id: int\n    budget_tokens: int  # hard constraint: must be int, not float\n"
+    },
+    "turns": [
+      "I'm building an LLM context manager. I've defined a frozen `Token` dataclass in `token_model.py` with fields `text: str`, `token_id: int`, and `budget_tokens: int`. The `frozen=True` and `budget_tokens` being an `int` (not float) are hard invariants throughout this project.",
+      "Can you help me write a quick utility that counts how many characters are in a Python string without using `len()`? Use a simple loop.",
+      "Now write a function `format_token(t: Token) -> str` that returns `'[id={token_id}] {text} (budget={budget_tokens})'`. Add it to `token_model.py`.",
+      "Actually, while you're at it, could you also write a one-liner to flatten a list of lists in Python? Just for my own reference.",
+      "Now implement `trim_budget(tokens: list[Token], max_budget: int) -> list[Token]` in a new file `budget.py`. It must return the longest prefix of `tokens` such that the cumulative sum of `budget_tokens` does not exceed `max_budget`. Remember: `budget_tokens` is always `int`, and `Token` is frozen \u2014 do not mutate or recreate tokens."
+    ],
+    "reference_solution": {
+      "token_model.py": "from dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass Token:\n    text: str\n    token_id: int\n    budget_tokens: int  # hard constraint: must be int, not float\n\ndef format_token(t: 'Token') -> str:\n    return f'[id={t.token_id}] {t.text} (budget={t.budget_tokens})'\n",
+      "budget.py": "from token_model import Token\nfrom typing import List\n\ndef trim_budget(tokens: List[Token], max_budget: int) -> List[Token]:\n    result = []\n    total = 0\n    for t in tokens:\n        if total + t.budget_tokens > max_budget:\n            break\n        result.append(t)\n        total += t.budget_tokens\n    return result\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['token_model', 'budget']:\n        if mod in sys.modules: del sys.modules[mod]\n    import token_model as tm\n    import budget as b\n    return tm, b\n\ndef test_trim_budget(sol_dir='.'):\n    tm, b = load_solution(sol_dir)\n    T = tm.Token\n    tokens = [T('hello', 1, 10), T('world', 2, 15), T('foo', 3, 5), T('bar', 4, 20)]\n    # max_budget=25 -> first two (10+15=25)\n    result = b.trim_budget(tokens, 25)\n    assert len(result) == 2, f'expected 2, got {len(result)}'\n    assert result[0].token_id == 1\n    assert result[1].token_id == 2\n    # max_budget=0\n    assert b.trim_budget(tokens, 0) == []\n    # max_budget=big\n    assert len(b.trim_budget(tokens, 1000)) == 4\n    # Token is still frozen\n    import dataclasses\n    fields = {f.name: f for f in dataclasses.fields(T)}\n    assert fields['budget_tokens'].type == int or str(fields['budget_tokens'].type) == 'int'\n    # format_token exists\n    ft = tm.format_token(T('hi', 7, 3))\n    assert '[id=7]' in ft and 'hi' in ft and 'budget=3' in ft, ft\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_trim_budget(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ct_02",
+    "category": "continuity",
+    "description": "Multi-turn: a monotonically-increasing version counter invariant established in turn 1 must be honoured in the final implementation.",
+    "files": {
+      "version_store.py": "# Skeleton \u2014 to be implemented across turns\nfrom typing import Optional\n\nclass VersionStore:\n    \"\"\"Invariant (stated in turn 1): version counter MUST be monotonically increasing.\n    Calling set() with a version <= current must raise ValueError.\n    \"\"\"\n    def __init__(self):\n        self._data: dict = {}\n        self._version: int = 0\n    # Methods to be implemented\n"
+    },
+    "turns": [
+      "I'm building a `VersionStore` in `version_store.py`. Critical invariant: **the version counter must be strictly monotonically increasing**. Any call to `set(key, value, version)` where `version <= self._version` must raise `ValueError`. This invariant must never be relaxed.",
+      "On a separate note, can you show me the difference between `__repr__` and `__str__` in Python? Just a quick example.",
+      "Now implement `get(key) -> Optional[str]` for `VersionStore`. It should return the stored value or `None` if the key doesn't exist. Keep the class skeleton as-is.",
+      "Quick Python question: how do I sort a list of dicts by a specific key? Give me a one-liner.",
+      "Now implement `set(key: str, value: str, version: int) -> None` for `VersionStore`. Remember: enforce the monotonically-increasing version invariant from turn 1 \u2014 raise `ValueError` if `version <= self._version`, then update `self._version = version` and store the value."
+    ],
+    "reference_solution": {
+      "version_store.py": "from typing import Optional\n\nclass VersionStore:\n    def __init__(self):\n        self._data: dict = {}\n        self._version: int = 0\n\n    def get(self, key: str) -> Optional[str]:\n        return self._data.get(key)\n\n    def set(self, key: str, value: str, version: int) -> None:\n        if version <= self._version:\n            raise ValueError(f'version {version} <= current {self._version}')\n        self._version = version\n        self._data[key] = value\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['version_store']:\n        if mod in sys.modules: del sys.modules[mod]\n    import version_store as m\n    return m\n\ndef test_version_store(sol_dir='.'):\n    m = load_solution(sol_dir)\n    vs = m.VersionStore()\n    assert vs.get('x') is None\n    vs.set('x', 'hello', 1)\n    assert vs.get('x') == 'hello'\n    vs.set('x', 'world', 5)\n    assert vs.get('x') == 'world'\n    # monotonic violation\n    try:\n        vs.set('x', 'bad', 5)\n        assert False, 'should raise ValueError for same version'\n    except ValueError:\n        pass\n    try:\n        vs.set('x', 'bad', 3)\n        assert False, 'should raise ValueError for older version'\n    except ValueError:\n        pass\n    # advance again\n    vs.set('y', 'new', 6)\n    assert vs.get('y') == 'new'\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_version_store(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ct_03",
+    "category": "continuity",
+    "description": "Multi-turn: a custom exception hierarchy with exact class names established in turn 1 must still be raised in the final implementation.",
+    "files": {
+      "errors.py": "# Custom exception hierarchy \u2014 class names are contractual\nclass PipelineError(Exception): pass\nclass StageError(PipelineError): pass\nclass TimeoutError_(StageError): pass\nclass ValidationError(StageError): pass\n",
+      "pipeline.py": "\"\"\"Pipeline runner \u2014 to be implemented.\"\"\"\nfrom errors import PipelineError, StageError, TimeoutError_, ValidationError\nfrom typing import Callable, List\n\ndef run_stage(name: str, fn: Callable, timeout_s: float = 5.0):\n    \"\"\"Run fn(). Wrap any Exception in StageError(name, original).\n    If fn raises TimeoutError_ already, re-raise as-is.\n    \"\"\"\n    pass\n"
+    },
+    "turns": [
+      "I have a pipeline with a custom exception hierarchy in `errors.py`: `PipelineError` \u2192 `StageError` \u2192 `TimeoutError_` and `ValidationError`. **Contract**: `run_stage` in `pipeline.py` must always raise from this hierarchy \u2014 never bare Python exceptions. `TimeoutError_` must be re-raised as-is; other exceptions must be wrapped in `StageError`.",
+      "Could you show me how `functools.wraps` works with decorators? Just a quick code snippet.",
+      "Actually, write a small helper `is_retryable(exc: Exception) -> bool` in `pipeline.py` that returns True only if `exc` is an instance of `StageError` but NOT `ValidationError`.",
+      "Unrelated: what's the fastest way to read a large file line by line in Python? (Just explain briefly.)",
+      "Now implement `run_stage` in `pipeline.py` properly. It must call `fn()`, and: if it raises `TimeoutError_`, re-raise it unchanged; if it raises any other exception, wrap it in `StageError(name, original_exc)`. Use the exact exception classes from `errors.py` \u2014 no bare exceptions."
+    ],
+    "reference_solution": {
+      "pipeline.py": "from errors import PipelineError, StageError, TimeoutError_, ValidationError\nfrom typing import Callable\n\ndef is_retryable(exc: Exception) -> bool:\n    return isinstance(exc, StageError) and not isinstance(exc, ValidationError)\n\ndef run_stage(name: str, fn: Callable, timeout_s: float = 5.0):\n    try:\n        return fn()\n    except TimeoutError_:\n        raise\n    except Exception as e:\n        raise StageError(name, e) from e\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['errors', 'pipeline']:\n        if mod in sys.modules: del sys.modules[mod]\n    import errors as err\n    import pipeline as p\n    return err, p\n\ndef test_run_stage(sol_dir='.'):\n    err, p = load_solution(sol_dir)\n    # normal\n    r = p.run_stage('s1', lambda: 42)\n    assert r == 42\n    # wraps generic\n    try:\n        p.run_stage('s2', lambda: (_ for _ in ()).throw(RuntimeError('oops')))\n    except err.StageError as e:\n        assert e.args[0] == 's2'\n    except Exception as e:\n        assert False, f'expected StageError, got {type(e)}'\n    # re-raises TimeoutError_ unchanged\n    try:\n        p.run_stage('s3', lambda: (_ for _ in ()).throw(err.TimeoutError_('t')))\n    except err.TimeoutError_:\n        pass\n    except err.StageError:\n        assert False, 'TimeoutError_ should not be wrapped'\n    # is_retryable\n    assert p.is_retryable(err.StageError('x'))\n    assert not p.is_retryable(err.ValidationError('v'))\n    assert not p.is_retryable(RuntimeError('r'))\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_run_stage(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ct_04",
+    "category": "continuity",
+    "description": "Multi-turn: an immutability invariant on a config object established early must be enforced in the final serializer.",
+    "files": {
+      "config_obj.py": "# Config object \u2014 immutability is a hard invariant\nfrom dataclasses import dataclass, field\nfrom typing import Tuple\n\n@dataclass(frozen=True)\nclass AppConfig:\n    host: str\n    port: int\n    tags: Tuple[str, ...] = field(default_factory=tuple)  # tuple, NOT list\n    debug: bool = False\n"
+    },
+    "turns": [
+      "I have `AppConfig` in `config_obj.py` \u2014 a frozen dataclass where `tags` is `Tuple[str, ...]` (not a list). **Immutability invariant**: nothing may mutate `AppConfig` after creation; serialization must not convert `tags` to a list \u2014 keep it as a tuple in the serialized repr.",
+      "Quick question: what's the difference between `@staticmethod` and `@classmethod`?",
+      "Write `config_to_dict(cfg: AppConfig) -> dict` in a new file `config_serializer.py`. It should return a dict with all fields. Keep `tags` as a tuple in the dict.",
+      "One more thing: explain Python's `__slots__` briefly.",
+      "Now add `config_from_dict(d: dict) -> AppConfig` to `config_serializer.py`. It should reconstruct the `AppConfig`, ensuring `tags` is a `tuple` even if the input dict has a list. Remember: the final object must be frozen and `tags` must be a tuple."
+    ],
+    "reference_solution": {
+      "config_serializer.py": "from config_obj import AppConfig\nfrom typing import Tuple\n\ndef config_to_dict(cfg: AppConfig) -> dict:\n    return {\n        'host':  cfg.host,\n        'port':  cfg.port,\n        'tags':  cfg.tags,  # keep as tuple\n        'debug': cfg.debug,\n    }\n\ndef config_from_dict(d: dict) -> AppConfig:\n    return AppConfig(\n        host=d['host'],\n        port=d['port'],\n        tags=tuple(d.get('tags', ())),\n        debug=d.get('debug', False),\n    )\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['config_obj', 'config_serializer']:\n        if mod in sys.modules: del sys.modules[mod]\n    import config_serializer as m\n    import config_obj as co\n    return m, co\n\ndef test_config_serializer(sol_dir='.'):\n    m, co = load_solution(sol_dir)\n    cfg = co.AppConfig(host='localhost', port=8080, tags=('a', 'b'), debug=True)\n    d = m.config_to_dict(cfg)\n    assert d['host'] == 'localhost'\n    assert d['port'] == 8080\n    assert isinstance(d['tags'], tuple), f'tags must be tuple, got {type(d[\"tags\"])}'\n    assert d['tags'] == ('a', 'b')\n    assert d['debug'] is True\n    # roundtrip with list input\n    d2 = {'host': 'remote', 'port': 443, 'tags': ['x', 'y'], 'debug': False}\n    cfg2 = m.config_from_dict(d2)\n    assert isinstance(cfg2.tags, tuple), f'tags must be tuple, got {type(cfg2.tags)}'\n    assert cfg2.tags == ('x', 'y')\n    assert cfg2.host == 'remote'\n    # immutability\n    try:\n        cfg2.host = 'bad'\n        assert False, 'frozen dataclass should raise'\n    except Exception:\n        pass\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_config_serializer(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ct_05",
+    "category": "continuity",
+    "description": "Multi-turn: a maximum-depth constraint on a recursive tree established in turn 1 must still be enforced in the final recursive builder.",
+    "files": {
+      "tree.py": "# Tree node and depth constraint\nfrom dataclasses import dataclass, field\nfrom typing import List, Optional\n\nMAX_DEPTH = 4  # Hard constraint: trees must never exceed depth 4\n\n@dataclass\nclass TreeNode:\n    value: int\n    children: List['TreeNode'] = field(default_factory=list)\n"
+    },
+    "turns": [
+      "I'm building a tree library. `tree.py` defines `TreeNode` and `MAX_DEPTH = 4`. **Hard invariant**: no tree built by any function in this project may exceed depth 4. This must be enforced in all builder functions.",
+      "Explain Python's `functools.lru_cache` briefly \u2014 when would you use it?",
+      "Write `tree_height(node: TreeNode) -> int` in `tree.py`. It should return the max depth of the subtree rooted at `node` (a leaf has height 1).",
+      "Quick one: what does `*args, **kwargs` mean in Python? One-line answer.",
+      "Now implement `build_tree(values: list[int], depth: int = 1, branching: int = 2) -> Optional[TreeNode]` in `tree.py`. It should build a balanced tree from `values` with given `branching` factor. **Enforce MAX_DEPTH**: if `depth > MAX_DEPTH`, return `None` and do not recurse further. Use `TreeNode` and `MAX_DEPTH` from the same file."
+    ],
+    "reference_solution": {
+      "tree.py": "from dataclasses import dataclass, field\nfrom typing import List, Optional\n\nMAX_DEPTH = 4\n\n@dataclass\nclass TreeNode:\n    value: int\n    children: List['TreeNode'] = field(default_factory=list)\n\ndef tree_height(node: 'TreeNode') -> int:\n    if not node.children:\n        return 1\n    return 1 + max(tree_height(c) for c in node.children)\n\ndef build_tree(values: list, depth: int = 1, branching: int = 2) -> Optional['TreeNode']:\n    if not values or depth > MAX_DEPTH:\n        return None\n    node = TreeNode(value=values[0])\n    remaining = values[1:]\n    chunk = max(1, len(remaining) // branching) if remaining else 0\n    for i in range(branching):\n        if not remaining:\n            break\n        child = build_tree(remaining[:chunk] or remaining[:1], depth + 1, branching)\n        if child is not None:\n            node.children.append(child)\n        remaining = remaining[chunk:] if chunk else remaining[1:]\n    return node\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['tree']:\n        if mod in sys.modules: del sys.modules[mod]\n    import tree as m\n    return m\n\ndef test_tree(sol_dir='.'):\n    m = load_solution(sol_dir)\n    # height\n    leaf = m.TreeNode(1)\n    assert m.tree_height(leaf) == 1\n    n = m.TreeNode(0, [m.TreeNode(1, [m.TreeNode(2)])])\n    assert m.tree_height(n) == 3\n    # build_tree depth constraint\n    vals = list(range(100))\n    root = m.build_tree(vals)\n    assert root is not None\n    h = m.tree_height(root)\n    assert h <= m.MAX_DEPTH, f'height {h} exceeds MAX_DEPTH {m.MAX_DEPTH}'\n    # build_tree with depth > MAX_DEPTH returns None\n    result = m.build_tree([1,2,3], depth=m.MAX_DEPTH + 1)\n    assert result is None, f'expected None for depth > MAX_DEPTH'\n    # single element\n    single = m.build_tree([42])\n    assert single.value == 42\n    assert single.children == []\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_tree(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ct_06",
+    "category": "continuity",
+    "description": "Multi-turn: a checksum algorithm (CRC32, not MD5/SHA) established in turn 1 must be used in the final batch-processor.",
+    "files": {
+      "checksum.py": "# Project-wide checksum contract \u2014 DO NOT MODIFY\nimport zlib\n\ndef compute_checksum(data: bytes) -> int:\n    \"\"\"Returns CRC32 checksum as unsigned 32-bit int.\n    CONTRACT: always CRC32 \u2014 never MD5, SHA, or any other algorithm.\"\"\"\n    return zlib.crc32(data) & 0xFFFFFFFF\n"
+    },
+    "turns": [
+      "I'm building a data pipeline. We use `checksum.py` for integrity checks. **Contract**: all checksums in this project MUST use `compute_checksum` from `checksum.py` (CRC32). Never use MD5, SHA, or any other algorithm \u2014 not even as a fallback.",
+      "Show me how Python's `contextlib.contextmanager` works. Quick example.",
+      "Write a `Chunk` dataclass in `processor.py` with fields: `data: bytes`, `index: int`, `checksum: int`. The checksum field should be populated from `compute_checksum(data)` by default.",
+      "Quick question: what's `__all__` in Python?",
+      "Now implement `process_batch(chunks: list[Chunk]) -> dict` in `processor.py`. It should return `{'total': int, 'valid': int, 'invalid': int}` where valid means the chunk's stored checksum matches `compute_checksum(chunk.data)`. Use only `compute_checksum` from `checksum.py` \u2014 no other hash functions."
+    ],
+    "reference_solution": {
+      "processor.py": "from dataclasses import dataclass, field\nfrom checksum import compute_checksum\nfrom typing import List\n\n@dataclass\nclass Chunk:\n    data: bytes\n    index: int\n    checksum: int = field(default=0)\n\n    def __post_init__(self):\n        if self.checksum == 0:\n            object.__setattr__(self, 'checksum', compute_checksum(self.data))\n\ndef process_batch(chunks: List[Chunk]) -> dict:\n    valid = sum(1 for c in chunks if compute_checksum(c.data) == c.checksum)\n    return {'total': len(chunks), 'valid': valid, 'invalid': len(chunks) - valid}\n"
+    },
+    "test_code": "import sys, zlib\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['checksum', 'processor']:\n        if mod in sys.modules: del sys.modules[mod]\n    import processor as m\n    import checksum as cs\n    return m, cs\n\ndef test_process_batch(sol_dir='.'):\n    m, cs = load_solution(sol_dir)\n    b1 = b'hello'\n    b2 = b'world'\n    c1 = m.Chunk(data=b1, index=0)\n    c2 = m.Chunk(data=b2, index=1)\n    # auto-checksum via compute_checksum\n    assert c1.checksum == cs.compute_checksum(b1), 'checksum mismatch'\n    assert c2.checksum == cs.compute_checksum(b2)\n    # process_batch all valid\n    r = m.process_batch([c1, c2])\n    assert r['total'] == 2\n    assert r['valid'] == 2\n    assert r['invalid'] == 0\n    # corrupt one\n    c3 = m.Chunk(data=b'corrupted', index=2, checksum=12345)\n    r2 = m.process_batch([c1, c2, c3])\n    assert r2['valid'] == 2\n    assert r2['invalid'] == 1\n    # verify CRC32 not MD5\n    import inspect\n    src = inspect.getsource(m)\n    assert 'md5' not in src.lower(), 'must not use MD5'\n    assert 'sha' not in src.lower(), 'must not use SHA'\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_process_batch(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ct_07",
+    "category": "continuity",
+    "description": "Multi-turn: a singleton pattern constraint established in turn 1 must still be respected in the final registry implementation.",
+    "files": {
+      "singleton.py": "# Singleton base \u2014 subclasses must remain singletons\nclass Singleton:\n    _instances: dict = {}\n\n    def __new__(cls, *args, **kwargs):\n        if cls not in cls._instances:\n            cls._instances[cls] = super().__new__(cls)\n        return cls._instances[cls]\n"
+    },
+    "turns": [
+      "I have a `Singleton` base class in `singleton.py`. **Invariant**: any class that inherits from `Singleton` must behave as a true singleton \u2014 `MyClass() is MyClass()` must always be `True`. The `ServiceRegistry` we're about to build must extend `Singleton`.",
+      "Quick Python tip request: how do you do dictionary merging in Python 3.9+?",
+      "Create a `ServiceRegistry` class in `registry_svc.py` that extends `Singleton`. It should have a `register(name: str, service: object) -> None` method and a `get(name: str) -> object` method (returns `None` if not found).",
+      "Side question: explain Python's GIL in one sentence.",
+      "Now add a `list_services() -> list[str]` method to `ServiceRegistry` that returns sorted names of all registered services. Also add `unregister(name: str) -> None` that removes a service (silent if not found). The singleton invariant must still hold."
+    ],
+    "reference_solution": {
+      "registry_svc.py": "from singleton import Singleton\nfrom typing import Optional, List\n\nclass ServiceRegistry(Singleton):\n    def __init__(self):\n        if not hasattr(self, '_services'):\n            self._services: dict = {}\n\n    def register(self, name: str, service: object) -> None:\n        self._services[name] = service\n\n    def get(self, name: str) -> Optional[object]:\n        return self._services.get(name)\n\n    def list_services(self) -> List[str]:\n        return sorted(self._services.keys())\n\n    def unregister(self, name: str) -> None:\n        self._services.pop(name, None)\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['singleton', 'registry_svc']:\n        if mod in sys.modules: del sys.modules[mod]\n    import singleton as sg\n    import registry_svc as m\n    return m\n\ndef test_service_registry(sol_dir='.'):\n    m = load_solution(sol_dir)\n    r1 = m.ServiceRegistry()\n    r2 = m.ServiceRegistry()\n    assert r1 is r2, 'ServiceRegistry must be singleton'\n    r1.register('db', object())\n    assert r1.get('db') is not None\n    assert r2.get('db') is not None, 'singleton: r2 must see r1 registration'\n    r1.register('cache', object())\n    r1.register('auth', object())\n    names = r1.list_services()\n    assert names == sorted(names), 'must be sorted'\n    assert 'db' in names and 'cache' in names and 'auth' in names\n    r1.unregister('cache')\n    assert r1.get('cache') is None\n    r1.unregister('nonexistent')  # silent\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_service_registry(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ct_08",
+    "category": "continuity",
+    "description": "Multi-turn: a strict unit system (SI only, no imperial) established in turn 1 must be enforced in the final converter.",
+    "files": {
+      "units.py": "# Unit definitions \u2014 SI only. Imperial is explicitly out of scope.\nfrom dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass Quantity:\n    value: float\n    unit: str  # SI unit symbol: 'm', 'kg', 's', 'J', 'N', 'Pa', 'W'\n\nSI_UNITS = frozenset(['m', 'kg', 's', 'J', 'N', 'Pa', 'W', 'Hz', 'K'])\n"
+    },
+    "turns": [
+      "I'm building a physics unit library. `units.py` defines `Quantity` and `SI_UNITS`. **Hard constraint**: this library is SI-only. No imperial units (ft, lb, miles, etc.) are allowed anywhere. Any function that receives a non-SI unit must raise `ValueError`.",
+      "Quick Python question: what's the difference between `is` and `==`?",
+      "Write `add_quantities(a: Quantity, b: Quantity) -> Quantity` in `converter.py`. It should add two quantities of the same unit and return a new `Quantity`. Raise `ValueError` if units differ.",
+      "Unrelated: explain list comprehension vs generator expression briefly.",
+      "Now implement `scale_quantity(q: Quantity, factor: float) -> Quantity` and `validate_quantity(q: Quantity) -> bool` in `converter.py`. `validate_quantity` returns True only if `q.unit` is in `SI_UNITS`. `scale_quantity` must call `validate_quantity` first and raise `ValueError` if the unit is not SI. No imperial units anywhere."
+    ],
+    "reference_solution": {
+      "converter.py": "from units import Quantity, SI_UNITS\n\ndef add_quantities(a: Quantity, b: Quantity) -> Quantity:\n    if a.unit != b.unit:\n        raise ValueError(f'Unit mismatch: {a.unit} vs {b.unit}')\n    return Quantity(value=a.value + b.value, unit=a.unit)\n\ndef validate_quantity(q: Quantity) -> bool:\n    return q.unit in SI_UNITS\n\ndef scale_quantity(q: Quantity, factor: float) -> Quantity:\n    if not validate_quantity(q):\n        raise ValueError(f'Non-SI unit: {q.unit}')\n    return Quantity(value=q.value * factor, unit=q.unit)\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['units', 'converter']:\n        if mod in sys.modules: del sys.modules[mod]\n    import units as u\n    import converter as m\n    return u, m\n\ndef test_converter(sol_dir='.'):\n    u, m = load_solution(sol_dir)\n    Q = u.Quantity\n    # add same units\n    r = m.add_quantities(Q(1.0, 'm'), Q(2.5, 'm'))\n    assert abs(r.value - 3.5) < 1e-9\n    assert r.unit == 'm'\n    # add different units\n    try:\n        m.add_quantities(Q(1.0, 'm'), Q(1.0, 'kg'))\n        assert False, 'should raise ValueError'\n    except ValueError:\n        pass\n    # validate\n    assert m.validate_quantity(Q(10.0, 'kg')) is True\n    assert m.validate_quantity(Q(10.0, 'lb')) is False\n    # scale valid\n    r2 = m.scale_quantity(Q(5.0, 'J'), 2.0)\n    assert abs(r2.value - 10.0) < 1e-9\n    # scale invalid (imperial)\n    try:\n        m.scale_quantity(Q(5.0, 'ft'), 2.0)\n        assert False, 'should raise ValueError for imperial'\n    except ValueError:\n        pass\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_converter(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ct_09",
+    "category": "continuity",
+    "description": "Multi-turn: a no-duplicate-IDs invariant on a task queue established in turn 1 must still be enforced in the final batch-submit function.",
+    "files": {
+      "task_queue.py": "# Task queue with strict no-duplicate-ID invariant\nfrom dataclasses import dataclass\nfrom typing import List, Optional\n\n@dataclass\nclass Task:\n    id: str\n    payload: str\n    priority: int = 0\n\nclass TaskQueue:\n    \"\"\"Invariant (stated in turn 1): task IDs must be globally unique.\n    Adding a task with a duplicate ID must raise ValueError.\"\"\"\n    def __init__(self):\n        self._tasks: List[Task] = []\n        self._ids: set = set()\n"
+    },
+    "turns": [
+      "I have a `TaskQueue` in `task_queue.py`. **Hard invariant**: task IDs must be globally unique within a queue. Any attempt to add a task with a duplicate ID must raise `ValueError`. This must never be relaxed.",
+      "What's the Python `bisect` module good for? One-line answer.",
+      "Implement `enqueue(task: Task) -> None` for `TaskQueue` in `task_queue.py`. Enforce the unique-ID invariant. Also implement `dequeue() -> Optional[Task]` that pops the highest-priority task (break ties by insertion order).",
+      "Quick question: explain `__enter__` and `__exit__` for context managers.",
+      "Now implement `batch_submit(queue: TaskQueue, tasks: list[Task]) -> dict` in `task_queue.py`. It should try to enqueue each task, collecting results: `{'submitted': int, 'rejected': int, 'errors': list[str]}`. Duplicate-ID tasks must be counted as rejected (not submitted), and their IDs listed in `errors`. The no-duplicate invariant on `TaskQueue` must still hold."
+    ],
+    "reference_solution": {
+      "task_queue.py": "from dataclasses import dataclass\nfrom typing import List, Optional\n\n@dataclass\nclass Task:\n    id: str\n    payload: str\n    priority: int = 0\n\nclass TaskQueue:\n    def __init__(self):\n        self._tasks: List[Task] = []\n        self._ids: set = set()\n\n    def enqueue(self, task: Task) -> None:\n        if task.id in self._ids:\n            raise ValueError(f'Duplicate task ID: {task.id}')\n        self._ids.add(task.id)\n        self._tasks.append(task)\n\n    def dequeue(self) -> Optional['Task']:\n        if not self._tasks:\n            return None\n        best_idx = max(range(len(self._tasks)), key=lambda i: self._tasks[i].priority)\n        task = self._tasks.pop(best_idx)\n        self._ids.discard(task.id)\n        return task\n\ndef batch_submit(queue: 'TaskQueue', tasks: List[Task]) -> dict:\n    submitted = 0\n    rejected = 0\n    errors: List[str] = []\n    for task in tasks:\n        try:\n            queue.enqueue(task)\n            submitted += 1\n        except ValueError:\n            rejected += 1\n            errors.append(task.id)\n    return {'submitted': submitted, 'rejected': rejected, 'errors': errors}\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['task_queue']:\n        if mod in sys.modules: del sys.modules[mod]\n    import task_queue as m\n    return m\n\ndef test_task_queue(sol_dir='.'):\n    m = load_solution(sol_dir)\n    q = m.TaskQueue()\n    t1 = m.Task('a', 'p1', 1)\n    t2 = m.Task('b', 'p2', 5)\n    t3 = m.Task('c', 'p3', 2)\n    q.enqueue(t1)\n    q.enqueue(t2)\n    q.enqueue(t3)\n    # duplicate\n    try:\n        q.enqueue(m.Task('a', 'dup', 10))\n        assert False, 'should raise ValueError'\n    except ValueError:\n        pass\n    # dequeue highest priority\n    top = q.dequeue()\n    assert top.id == 'b', f'expected b, got {top.id}'\n    # batch_submit\n    q2 = m.TaskQueue()\n    tasks = [m.Task('x', 'p', 1), m.Task('y', 'p', 2), m.Task('x', 'dup', 3)]\n    result = m.batch_submit(q2, tasks)\n    assert result['submitted'] == 2\n    assert result['rejected'] == 1\n    assert 'x' in result['errors']\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_task_queue(sol_dir)\n    print('PASS')\n"
+  },
+  {
+    "id": "ct_10",
+    "category": "continuity",
+    "description": "Multi-turn: a pure-function invariant (no side effects, no global state) established in turn 1 must hold in the final memoization wrapper.",
+    "files": {
+      "pure.py": "# Pure function contract\n# All functions in this module must be pure: no side effects, no global mutation.\nfrom typing import Callable, Any, Tuple\n"
+    },
+    "turns": [
+      "I'm building `pure.py` \u2014 a module where **every function must be pure** (no side effects, no mutation of global state). I need a memoization wrapper, but it must be implemented without mutating any shared global state across calls \u2014 the cache must live with the function, not in a module-level dict.",
+      "Quick Python question: what does `yield from` do?",
+      "Write `compose(f, g)` in `pure.py` \u2014 returns a new function `h` where `h(x) = f(g(x))`. Both `f` and `g` must be pure (no enforcement needed in code, just document it).",
+      "What's the difference between `deepcopy` and `copy` in Python?",
+      "Now implement `memoize(fn: Callable) -> Callable` in `pure.py`. It must cache results of `fn` keyed on its arguments. **The cache must be stored as a closure variable (default arg or closure), not in a module-level dict or any global**. The original function's purity invariant must be respected \u2014 `memoize` itself introduces no module-level mutable state."
+    ],
+    "reference_solution": {
+      "pure.py": "from typing import Callable, Any\n\ndef compose(f: Callable, g: Callable) -> Callable:\n    \"\"\"Returns h where h(x) = f(g(x)). Both f and g must be pure.\"\"\"\n    def h(x: Any) -> Any:\n        return f(g(x))\n    return h\n\ndef memoize(fn: Callable) -> Callable:\n    # Cache stored as closure default-arg \u2014 no module-level mutable state.\n    def wrapper(*args, _cache={}) -> Any:\n        if args not in _cache:\n            _cache[args] = fn(*args)\n        return _cache[args]\n    return wrapper\n"
+    },
+    "test_code": "import sys\n\ndef load_solution(sol_dir):\n    sys.path.insert(0, sol_dir)\n    for mod in ['pure']:\n        if mod in sys.modules: del sys.modules[mod]\n    import pure as m\n    return m\n\ndef test_pure(sol_dir='.'):\n    m = load_solution(sol_dir)\n    # compose\n    double = lambda x: x * 2\n    inc    = lambda x: x + 1\n    h = m.compose(double, inc)\n    assert h(3) == 8   # double(inc(3)) = double(4) = 8\n    assert h(0) == 2\n    # memoize\n    call_count = [0]\n    def expensive(x):\n        call_count[0] += 1\n        return x * x\n    memo_exp = m.memoize(expensive)\n    assert memo_exp(4) == 16\n    assert memo_exp(4) == 16\n    assert call_count[0] == 1, f'expected 1 call, got {call_count[0]}'\n    assert memo_exp(5) == 25\n    assert call_count[0] == 2\n    # no module-level cache dict\n    import inspect\n    src = inspect.getsource(m.memoize)\n    assert '_CACHE' not in src and '\\nglobal ' not in src, 'must not use module-level global statement'\n\nif __name__ == '__main__':\n    sol_dir = sys.argv[1] if len(sys.argv) > 1 else '.'\n    test_pure(sol_dir)\n    print('PASS')\n"
+  }
+]

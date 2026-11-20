@@ -15,3 +15,6 @@ wheels/
 *.bin
 *.gguf
 edgemem.toml
+
+# Benchmark result artifacts (commit explicit baseline reports manually)
+bench/results/
