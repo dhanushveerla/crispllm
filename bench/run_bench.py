@@ -61,12 +61,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Env var name containing the API key (default: OPENAI_API_KEY; set to '' to skip)")
     p.add_argument("--extra-body-json", default="{}",
                    help="JSON string merged into every request body (e.g. '{\"num_ctx\": 8192}')")
-    p.add_argument("--tasks-file", default=None,
-                   help="Path to bench_tasks.json (default: bench/bench_tasks.json relative to repo root)")
+    p.add_argument("--tasks", "--tasks-file", dest="tasks_file", default=None,
+                   help="Path to tasks JSON file (default: bench/bench_tasks.json relative to repo root)")
     p.add_argument("--limit", type=int, default=None,
                    help="Run only the first N tasks (useful for smoke tests)")
-    p.add_argument("--category", default=None, choices=["exact_fact", "continuity"],
-                   help="Filter tasks by category")
+    p.add_argument("--category", default=None,
+                   help="Filter tasks by category (e.g. exact_fact, continuity, stress_continuity)")
     p.add_argument("--label", default="run",
                    help="Label used in output filenames (e.g. 'raw-baseline', 'edgemem-v1')")
     p.add_argument("--output-dir", default=None,
@@ -115,10 +115,11 @@ def _http_post_json(
         urllib.error.URLError  — for connection failures.
     """
     body = json.dumps(payload).encode()
-    headers = {
+    headers: dict[str, str] = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}" if api_key else "Bearer none",
     }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     base_delay = 2.0
     for attempt in range(max_retries + 1):
@@ -488,6 +489,9 @@ def main() -> None:
     api_key = ""
     if args.api_key_env:
         api_key = os.environ.get(args.api_key_env, "")
+        if not api_key and (args.api_key_env.startswith("nvapi-") or args.api_key_env.startswith("sk-")):
+            api_key = args.api_key_env
+        api_key = api_key.strip()
 
     # Extra body
     try:

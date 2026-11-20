@@ -24,12 +24,21 @@ import pytest
 
 BENCH_DIR = Path(__file__).parent.parent / "bench"
 TASKS_FILE = BENCH_DIR / "bench_tasks.json"
+STRESS_TASKS_FILE = BENCH_DIR / "stress_tasks.json"
 
 
 @pytest.fixture(scope="module")
 def tasks() -> list[dict]:
     assert TASKS_FILE.exists(), f"bench_tasks.json not found at {TASKS_FILE}"
     with open(TASKS_FILE) as f:
+        data = json.load(f)
+    return data
+
+
+@pytest.fixture(scope="module")
+def stress_tasks() -> list[dict]:
+    assert STRESS_TASKS_FILE.exists(), f"stress_tasks.json not found at {STRESS_TASKS_FILE}"
+    with open(STRESS_TASKS_FILE) as f:
         data = json.load(f)
     return data
 
@@ -258,4 +267,58 @@ class TestPassAtOneCoverage:
                 unexpected_passes.append(task["id"])
         assert not unexpected_passes, (
             f"Empty solution unexpectedly passed: {unexpected_passes}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 6. Stress tasks suite verification
+# ---------------------------------------------------------------------------
+
+class TestStressTasksSuite:
+    def test_stress_task_count(self, stress_tasks):
+        assert len(stress_tasks) == 6, f"Expected 6 stress tasks, got {len(stress_tasks)}"
+
+    @pytest.mark.parametrize("idx", range(6))
+    def test_stress_task_schema(self, stress_tasks, idx):
+        task = stress_tasks[idx]
+        missing = REQUIRED_KEYS - set(task.keys())
+        assert not missing, f"Stress task {idx} missing keys: {missing}"
+        assert task["category"] == "stress_continuity", f"Unexpected category {task['category']!r}"
+        assert len(task["turns"]) >= 6, f"Expected >= 6 turns, got {len(task['turns'])}"
+
+    @pytest.mark.parametrize("idx", range(6))
+    def test_stress_task_prompt_length(self, stress_tasks, idx):
+        task = stress_tasks[idx]
+        file_chars = sum(len(c) for c in task["files"].values())
+        turn_chars = sum(len(t) for t in task["turns"])
+        estimated_tokens = (file_chars + turn_chars) // 4
+        assert estimated_tokens >= 3500, (
+            f"Stress task {task['id']!r} prompt too short: {estimated_tokens} tokens (< 3500)"
+        )
+        assert estimated_tokens <= 8500, (
+            f"Stress task {task['id']!r} prompt too long: {estimated_tokens} tokens (> 8500)"
+        )
+
+    @pytest.mark.parametrize("idx", range(6))
+    def test_stress_reference_solution_passes(self, stress_tasks, idx):
+        task = stress_tasks[idx]
+        passed, output = _run_test_in_tmpdir(
+            task=task,
+            solution_files=task["reference_solution"],
+        )
+        assert passed, (
+            f"Stress task {task['id']!r} reference solution FAILED test_code.\n"
+            f"Output:\n{output[:1000]}"
+        )
+
+    @pytest.mark.parametrize("idx", range(6))
+    def test_stress_empty_solution_fails(self, stress_tasks, idx):
+        task = stress_tasks[idx]
+        broken_sol = _make_empty_solution(task)
+        passed, _output = _run_test_in_tmpdir(
+            task=task,
+            solution_files=broken_sol,
+        )
+        assert not passed, (
+            f"Stress task {task['id']!r}: empty/broken solution unexpectedly PASSED."
         )
