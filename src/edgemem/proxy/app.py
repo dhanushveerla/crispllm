@@ -389,6 +389,10 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
     return app
 
 
+def _is_local_fallback_status(status_code: int) -> bool:
+    return status_code >= 500 or status_code in (404, 429)
+
+
 async def _handle_non_streaming_request(
     client: httpx.AsyncClient,
     body: dict[str, Any],
@@ -419,7 +423,7 @@ async def _handle_non_streaming_request(
                 headers=headers,
                 timeout=target.timeout_s,
             )
-            if resp.status_code >= 500:
+            if _is_local_fallback_status(resp.status_code):
                 resp = None
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
             resp = None
@@ -574,7 +578,7 @@ async def _handle_streaming_request(
                 timeout=target.timeout_s,
             )
             opened_resp = await client.send(req, stream=True)
-            if opened_resp.status_code >= 500:
+            if _is_local_fallback_status(opened_resp.status_code):
                 await opened_resp.aclose()
                 opened_resp = None
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):

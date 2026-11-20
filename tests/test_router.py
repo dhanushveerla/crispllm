@@ -296,6 +296,58 @@ def test_local_to_cloud_fallback(tmp_path) -> None:
         assert health["cloud_requests"] == 2
 
 
+def test_local_404_model_not_found_fallback(tmp_path) -> None:
+    client, transport, cfg = _make_test_setup(
+        tmp_path,
+        cloud_enabled=True,
+        escalate_on_error=True,
+    )
+    with client:
+        transport.local_error = 404
+        secret = "sk-proj-1234567890abcdef12345678"
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "user", "content": f"Secret key: {secret}"}
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.headers["X-EdgeMem-Route"] == "cloud"
+        assert resp.headers["X-EdgeMem-Route-Reason"] == "local_error_fallback"
+        assert resp.headers["X-EdgeMem-Redacted"] == "1"
+
+        data = resp.json()
+        assert secret in data["choices"][0]["message"]["content"]
+        assert "__EDGEMEM_" not in data["choices"][0]["message"]["content"]
+
+        cloud_req = transport.request_bodies[-1]
+        assert secret not in json.dumps(cloud_req)
+        assert "__EDGEMEM_SECRET_1__" in json.dumps(cloud_req)
+
+        health = client.get("/health").json()
+        assert health["fallback_escalations"] == 1
+        assert health["cloud_requests"] == 1
+
+        transport.local_error = 429
+        resp_stream = client.post(
+            "/v1/chat/completions",
+            json={
+                "stream": True,
+                "messages": [{"role": "user", "content": "streaming retry"}],
+            },
+        )
+        assert resp_stream.status_code == 200
+        assert resp_stream.headers["X-EdgeMem-Route"] == "cloud"
+        assert resp_stream.headers["X-EdgeMem-Route-Reason"] == "local_error_fallback"
+
+        health = client.get("/health").json()
+        assert health["fallback_escalations"] == 2
+        assert health["cloud_requests"] == 2
+
+
 def test_non_streaming_privacy_round_trip(tmp_path) -> None:
     client, transport, cfg = _make_test_setup(
         tmp_path,
