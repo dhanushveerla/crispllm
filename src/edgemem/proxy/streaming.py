@@ -118,6 +118,8 @@ async def stream_with_heartbeat(
     headers: dict[str, str],
     on_first_data: Any = None,
     heartbeat_interval: float | None = None,
+    url: str = "/chat/completions",
+    timeout: float | httpx.Timeout | None = None,
 ) -> AsyncIterator[str]:
     """Open an upstream SSE stream with keepalive heartbeats during TTFT wait.
 
@@ -147,7 +149,7 @@ async def stream_with_heartbeat(
         """Open the upstream stream and push SSE lines into the queue."""
         try:
             async with client.stream(
-                "POST", "/chat/completions", json=body, headers=headers
+                "POST", url, json=body, headers=headers, timeout=timeout
             ) as resp:
                 async for sse_line in stream_sse_passthrough(
                     resp, on_first_data=_on_first_data

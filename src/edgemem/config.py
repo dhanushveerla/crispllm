@@ -40,27 +40,64 @@ class MemoryConfig:
 
 
 @dataclass
+class CloudUpstreamConfig:
+    """Configuration for optional cloud fallback/escalation LLM provider."""
+
+    enabled: bool = False
+    base_url: str = ""
+    api_key_env: str = ""
+    model: str = ""
+    extra_body: dict[str, Any] = field(default_factory=dict)
+    timeout_s: float = 60.0
+
+    @property
+    def api_key(self) -> str | None:
+        if not self.api_key_env:
+            return None
+        return os.environ.get(self.api_key_env)
+
+
+@dataclass
+class RoutingConfig:
+    """Configuration for hybrid local-to-cloud request routing."""
+
+    strategy: str = "local_first"
+    escalate_token_threshold: int = 6000
+    escalate_on_local_error: bool = True
+    local_timeout_s: float = 30.0
+
+
+@dataclass
+class PrivacyConfig:
+    """Configuration for zero-dependency secret and PII redaction."""
+
+    enabled: bool = True
+    redact_on_cloud_only: bool = True
+    redact_secrets: bool = True
+    redact_emails: bool = True
+    redact_ips: bool = False
+    extra_patterns: list[str] = field(default_factory=list)
+
+
+@dataclass
 class EdgeMemConfig:
     """Full EdgeMem configuration."""
 
-    # Server
     host: str = "127.0.0.1"
     port: int = 8080
 
-    # Upstream LLM
     upstream_base_url: str = "http://127.0.0.1:11434/v1"
-    api_key_env: str = ""  # env var name holding the API key (empty = no auth)
+    api_key_env: str = ""
     model: str = "qwen3.5:2b-q4_K_M"
 
-    # Optional extra body fields sent with every upstream request
-    # e.g. {"reasoning_effort": "none"}
     extra_body: dict[str, Any] = field(default_factory=dict)
 
-    # Telemetry
-    telemetry_dir: str = ""  # empty = use platformdirs default
+    telemetry_dir: str = ""
 
-    # Memory
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    cloud: CloudUpstreamConfig = field(default_factory=CloudUpstreamConfig)
+    routing: RoutingConfig = field(default_factory=RoutingConfig)
+    privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
 
     @property
     def upstream_api_key(self) -> str | None:
@@ -78,14 +115,7 @@ class EdgeMemConfig:
 
 
 def load_config(path: Path | None = None) -> EdgeMemConfig:
-    """Load config from TOML file, falling back to defaults.
-
-    Args:
-        path: Explicit path to config file. If None, searches default locations.
-
-    Returns:
-        Populated EdgeMemConfig.
-    """
+    """Load config from TOML file, falling back to defaults."""
     raw: dict[str, Any] = {}
 
     if path is not None:
@@ -101,11 +131,13 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         except FileNotFoundError:
             continue
 
-    # Flatten [server], [upstream], [telemetry], and [memory] sections
     server = raw.get("server", {})
     upstream = raw.get("upstream", {})
     telemetry = raw.get("telemetry", {})
     memory = raw.get("memory", {})
+    cloud = raw.get("cloud", {})
+    routing = raw.get("routing", {})
+    privacy = raw.get("privacy", {})
 
     memory_cfg = MemoryConfig(
         enabled=memory.get("enabled", MemoryConfig.enabled),
@@ -131,40 +163,74 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         db_path=memory.get("db_path", MemoryConfig.db_path),
     )
 
+    cloud_cfg = CloudUpstreamConfig(
+        enabled=cloud.get("enabled", CloudUpstreamConfig.enabled),
+        base_url=cloud.get("base_url", CloudUpstreamConfig.base_url),
+        api_key_env=cloud.get("api_key_env", CloudUpstreamConfig.api_key_env),
+        model=cloud.get("model", CloudUpstreamConfig.model),
+        extra_body=cloud.get("extra_body", {}),
+        timeout_s=float(cloud.get("timeout_s", CloudUpstreamConfig.timeout_s)),
+    )
+
+    routing_cfg = RoutingConfig(
+        strategy=routing.get("strategy", RoutingConfig.strategy),
+        escalate_token_threshold=int(
+            routing.get(
+                "escalate_token_threshold",
+                RoutingConfig.escalate_token_threshold,
+            )
+        ),
+        escalate_on_local_error=routing.get(
+            "escalate_on_local_error", RoutingConfig.escalate_on_local_error
+        ),
+        local_timeout_s=float(
+            routing.get("local_timeout_s", RoutingConfig.local_timeout_s)
+        ),
+    )
+
+    privacy_cfg = PrivacyConfig(
+        enabled=privacy.get("enabled", PrivacyConfig.enabled),
+        redact_on_cloud_only=privacy.get(
+            "redact_on_cloud_only", PrivacyConfig.redact_on_cloud_only
+        ),
+        redact_secrets=privacy.get("redact_secrets", PrivacyConfig.redact_secrets),
+        redact_emails=privacy.get("redact_emails", PrivacyConfig.redact_emails),
+        redact_ips=privacy.get("redact_ips", PrivacyConfig.redact_ips),
+        extra_patterns=list(privacy.get("extra_patterns", [])),
+    )
+
     return EdgeMemConfig(
         host=server.get("host", EdgeMemConfig.host),
         port=server.get("port", EdgeMemConfig.port),
-        upstream_base_url=upstream.get("base_url", EdgeMemConfig.upstream_base_url),
+        upstream_base_url=upstream.get(
+            "base_url", EdgeMemConfig.upstream_base_url
+        ),
         api_key_env=upstream.get("api_key_env", EdgeMemConfig.api_key_env),
         model=upstream.get("model", EdgeMemConfig.model),
         extra_body=upstream.get("extra_body", {}),
         telemetry_dir=telemetry.get("dir", EdgeMemConfig.telemetry_dir),
         memory=memory_cfg,
+        cloud=cloud_cfg,
+        routing=routing_cfg,
+        privacy=privacy_cfg,
     )
 
 
 def default_toml_content() -> str:
     """Generate default edgemem.toml content for `edgemem init`."""
     return """\
-# EdgeMem Configuration
-# See https://github.com/edgemem/edgemem for documentation.
-
 [server]
 host = "127.0.0.1"
 port = 8080
 
 [upstream]
 base_url = "http://127.0.0.1:11434/v1"
-# api_key_env = "OPENAI_API_KEY"  # env var name holding the API key
 model = "qwen3.5:2b-q4_K_M"
 
-# Extra body fields merged into every upstream request.
-# Client-sent keys take precedence (never overwritten).
 [upstream.extra_body]
 reasoning_effort = "none"
 
 [telemetry]
-# dir = "/custom/path"  # defaults to platformdirs user_data_dir("edgemem")
 
 [memory]
 enabled = true
@@ -175,5 +241,23 @@ compact_middle_turns = true
 compact_threshold_tokens = 2000
 compact_min_turn_tokens = 150
 keep_recent_turns = 2
-# db_path = "/custom/memory.db"  # defaults to platformdirs user_data_dir("edgemem") / "memory.db"
+
+[cloud]
+enabled = false
+base_url = ""
+api_key_env = ""
+model = ""
+
+[routing]
+strategy = "local_first"
+escalate_token_threshold = 6000
+escalate_on_local_error = true
+local_timeout_s = 30.0
+
+[privacy]
+enabled = true
+redact_on_cloud_only = true
+redact_secrets = true
+redact_emails = true
+redact_ips = false
 """

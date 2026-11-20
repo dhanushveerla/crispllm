@@ -73,6 +73,13 @@ def status(config_path: Path | None) -> None:
         memory_enabled = data.get("memory_enabled", False)
         facts_count = data.get("facts_count", 0)
         click.echo(f"Memory: {'enabled' if memory_enabled else 'disabled'} ({facts_count} facts)")
+        privacy_enabled = data.get("privacy_enabled", False)
+        secrets_redacted = data.get("secrets_redacted_total", 0)
+        click.echo(f"Privacy: {'enabled' if privacy_enabled else 'disabled'} ({secrets_redacted} redacted)")
+        local_reqs = data.get("local_requests", 0)
+        cloud_reqs = data.get("cloud_requests", 0)
+        fallbacks = data.get("fallback_escalations", 0)
+        click.echo(f"Routing: local={local_reqs}, cloud={cloud_reqs}, fallbacks={fallbacks}")
     except httpx.ConnectError:
         click.echo(f"EdgeMem not running at {url}", err=True)
         sys.exit(1)
