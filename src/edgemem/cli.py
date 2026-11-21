@@ -265,15 +265,29 @@ def memory() -> None:
 
 @memory.command("list")
 @click.option("--kind", default=None, help="Filter facts by kind (constraint, constant, signature, note).")
+@click.option("--tier", default=None, type=click.Choice(["core", "episodic", "archival"], case_sensitive=False), help="Filter facts by tier.")
+@click.option("--include-superseded", is_flag=True, default=False, help="Include superseded facts.")
 @click.option("--limit", default=50, type=int, help="Max facts to return.")
 @click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path))
-def memory_list(kind: str | None, limit: int, config_path: Path | None) -> None:
+def memory_list(
+    kind: str | None,
+    tier: str | None,
+    include_superseded: bool,
+    limit: int,
+    config_path: Path | None,
+) -> None:
     """List stored facts in EdgeMem memory."""
     from edgemem.memory.store import MemoryStore
 
     cfg = load_config(config_path)
     with MemoryStore(cfg.memory.db_path) as store:
-        facts = store.list_facts(kind=kind, limit=limit)
+        facts = store.list_facts(
+            kind=kind,
+            tier=tier.lower() if tier else None,
+            include_archival=True if (tier and tier.lower() == "archival") else False,
+            include_superseded=include_superseded,
+            limit=limit,
+        )
         if not facts:
             click.echo("No facts stored.")
             return
@@ -281,20 +295,26 @@ def memory_list(kind: str | None, limit: int, config_path: Path | None) -> None:
         click.echo(f"Stored facts ({len(facts)}):")
         for f in facts:
             pin_badge = "[PINNED] " if f.pinned else ""
-            click.echo(f"  #{f.id} [{f.kind}] {pin_badge}{f.key} = {f.value}")
+            click.echo(f"  #{f.id} [{f.kind}] [{f.tier}/{f.status}] {pin_badge}{f.key} = {f.value}")
 
 
 @memory.command("search")
 @click.argument("query")
+@click.option("--all", "all_facts", is_flag=True, default=False, help="Include archival and superseded facts.")
 @click.option("--limit", default=10, type=int, help="Max results.")
 @click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path))
-def memory_search(query: str, limit: int, config_path: Path | None) -> None:
+def memory_search(query: str, all_facts: bool, limit: int, config_path: Path | None) -> None:
     """Search EdgeMem memory using BM25 FTS5 ranking."""
     from edgemem.memory.store import MemoryStore
 
     cfg = load_config(config_path)
     with MemoryStore(cfg.memory.db_path) as store:
-        facts = store.search_facts(query, limit=limit)
+        facts = store.search_facts(
+            query,
+            include_archival=all_facts,
+            include_superseded=all_facts,
+            limit=limit,
+        )
         if not facts:
             click.echo("No matches found.")
             return
@@ -302,7 +322,49 @@ def memory_search(query: str, limit: int, config_path: Path | None) -> None:
         click.echo(f"Search results for '{query}' ({len(facts)}):")
         for f in facts:
             pin_badge = "[PINNED] " if f.pinned else ""
-            click.echo(f"  #{f.id} [{f.kind}] {pin_badge}{f.key} = {f.value}")
+            click.echo(f"  #{f.id} [{f.kind}] [{f.tier}/{f.status}] {pin_badge}{f.key} = {f.value}")
+
+
+@memory.command("consolidate")
+@click.option("--dry-run", is_flag=True, default=False, help="Calculate consolidation changes without applying them.")
+@click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path))
+def memory_consolidate(dry_run: bool, config_path: Path | None) -> None:
+    """Run an immediate memory consolidation sweep."""
+    from edgemem.memory.consolidator import MemoryConsolidator
+    from edgemem.memory.store import MemoryStore
+
+    cfg = load_config(config_path)
+    with MemoryStore(cfg.memory.db_path) as store:
+        consolidator = MemoryConsolidator(store=store, config=cfg)
+        report = consolidator.consolidate_once(dry_run=dry_run)
+        prefix = "[DRY-RUN] " if report.dry_run else ""
+        click.echo(f"{prefix}Consolidation complete (mode: {report.mode}):")
+        click.echo(f"  Merged: {report.merged}")
+        click.echo(f"  Superseded: {report.superseded}")
+        click.echo(f"  Promoted: {report.promoted}")
+        click.echo(f"  Demoted: {report.demoted}")
+        click.echo(f"  Created: {report.created}")
+
+
+@memory.command("history")
+@click.argument("key")
+@click.option("--session", default=None, help="Filter by session ID.")
+@click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path))
+def memory_history(key: str, session: str | None, config_path: Path | None) -> None:
+    """Display the versioned supersession timeline of a memory key."""
+    from edgemem.memory.store import MemoryStore
+
+    cfg = load_config(config_path)
+    with MemoryStore(cfg.memory.db_path) as store:
+        history = store.get_fact_history(key, session_id=session)
+        if not history:
+            click.echo(f"No history found for '{key}'.")
+            return
+
+        click.echo(f"History for '{key}' ({len(history)} versions):")
+        for f in history:
+            superseded_info = f" (superseded_by: #{f.superseded_by})" if f.superseded_by else ""
+            click.echo(f"  #{f.id} [{f.kind}] [{f.tier}/{f.status}] {f.key} = {f.value}{superseded_info}")
 
 
 @memory.command("clear")

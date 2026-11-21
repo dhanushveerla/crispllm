@@ -51,6 +51,27 @@ compact_min_turn_tokens = 150
 # Number of most recent conversation turns to always preserve verbatim.
 keep_recent_turns = 2
 
+# Half-life in days for exponential memory relevance decay.
+decay_half_life_days = 14.0
+
+# Relevance score threshold below which decayed episodic memories are demoted to archival.
+archive_threshold = 0.25
+
+# Access count threshold to promote frequently recalled episodic memories to core tier.
+promote_access_threshold = 5
+
+# Enable background consolidation worker (deduplication, supersession, tier promotions/demotions).
+consolidation_enabled = true
+
+# Idle seconds before background consolidation triggers.
+consolidation_idle_s = 30.0
+
+# Number of proxy turns before triggering an immediate background consolidation sweep.
+consolidation_every_n_turns = 8
+
+# Enable optional async LLM synthesis for episodic episodes into architectural facts.
+llm_synthesis = false
+
 # Path to SQLite database file. If omitted, defaults to ~/.local/share/edgemem/memory.db
 # db_path = "memory.db"
 

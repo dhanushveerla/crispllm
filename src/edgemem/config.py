@@ -37,6 +37,13 @@ class MemoryConfig:
     compact_min_turn_tokens: int = 150
     keep_recent_turns: int = 2
     db_path: str | None = None
+    decay_half_life_days: float = 14.0
+    archive_threshold: float = 0.25
+    promote_access_threshold: int = 5
+    consolidation_enabled: bool = True
+    consolidation_idle_s: float = 30.0
+    consolidation_every_n_turns: int = 8
+    llm_synthesis: bool = False
 
 
 @dataclass
@@ -183,6 +190,27 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
             "keep_recent_turns", MemoryConfig.keep_recent_turns
         ),
         db_path=memory.get("db_path", MemoryConfig.db_path),
+        decay_half_life_days=float(
+            memory.get("decay_half_life_days", MemoryConfig.decay_half_life_days)
+        ),
+        archive_threshold=float(
+            memory.get("archive_threshold", MemoryConfig.archive_threshold)
+        ),
+        promote_access_threshold=int(
+            memory.get("promote_access_threshold", MemoryConfig.promote_access_threshold)
+        ),
+        consolidation_enabled=bool(
+            memory.get("consolidation_enabled", MemoryConfig.consolidation_enabled)
+        ),
+        consolidation_idle_s=float(
+            memory.get("consolidation_idle_s", MemoryConfig.consolidation_idle_s)
+        ),
+        consolidation_every_n_turns=int(
+            memory.get("consolidation_every_n_turns", MemoryConfig.consolidation_every_n_turns)
+        ),
+        llm_synthesis=bool(
+            memory.get("llm_synthesis", MemoryConfig.llm_synthesis)
+        ),
     )
 
     cloud_cfg = CloudUpstreamConfig(

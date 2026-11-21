@@ -11,11 +11,12 @@ import copy
 import hashlib
 import logging
 import re
+import time
 from typing import Any, Mapping
 
 from edgemem.config import MemoryConfig
 from edgemem.memory.extractor import extract_facts_from_messages
-from edgemem.memory.store import Fact, MemoryStore
+from edgemem.memory.store import Fact, MemoryStore, compute_effective_salience
 
 logger = logging.getLogger("edgemem.proxy.memory")
 
@@ -226,31 +227,60 @@ class MemoryMiddleware:
                     )
                 facts_extracted = len(extracted)
 
-            candidate_facts: list[Fact] = []
-            seen_keys: set[tuple[str, str]] = set()
+            core_facts: list[Fact] = []
+            seen_core_keys: set[tuple[str, str]] = set()
 
             if self.config.inject_constraints:
                 pinned = self.store.get_pinned_facts(
                     session_id=session_id, include_global=True, limit=20
                 )
                 for f in pinned:
-                    k = (f.kind, f.key)
-                    if k not in seen_keys:
-                        seen_keys.add(k)
-                        candidate_facts.append(f)
+                    if f.status == "active" and (f.tier == "core" or f.pinned):
+                        k = (f.kind, f.key)
+                        if k not in seen_core_keys:
+                            seen_core_keys.add(k)
+                            core_facts.append(f)
 
+            episodic_facts: list[Fact] = []
             if last_user_text:
                 search_res = self.store.search_facts(
                     query=last_user_text,
                     session_id=session_id,
                     include_global=True,
-                    limit=10,
+                    tier="episodic",
+                    include_archival=False,
+                    include_superseded=False,
+                    limit=20,
                 )
-                for f in search_res:
+                now_ts = time.time()
+                scored_episodic: list[tuple[float, Fact]] = []
+                seen_ep_keys: set[tuple[str, str]] = set(seen_core_keys)
+
+                for idx, f in enumerate(search_res):
+                    if f.status != "active" or f.tier != "episodic":
+                        continue
                     k = (f.kind, f.key)
-                    if k not in seen_keys:
-                        seen_keys.add(k)
-                        candidate_facts.append(f)
+                    if k in seen_ep_keys:
+                        continue
+                    seen_ep_keys.add(k)
+                    fts_relevance = 1.0 / (1.0 + idx)
+                    ref_time = (
+                        f.last_accessed_at
+                        if f.last_accessed_at is not None
+                        else (f.updated_at or f.created_at or now_ts)
+                    )
+                    age_days = max(0.0, (now_ts - ref_time) / 86400.0)
+                    eff_salience = compute_effective_salience(
+                        salience=f.salience,
+                        age_days=age_days,
+                        access_count=f.access_count,
+                        half_life_days=self.config.decay_half_life_days,
+                    )
+                    score = fts_relevance * eff_salience
+                    scored_episodic.append((score, f))
+
+                scored_episodic.sort(key=lambda x: x[0], reverse=True)
+                episodic_facts = [item[1] for item in scored_episodic]
 
             compacted_turns = 0
             new_messages = copy.deepcopy(messages)
@@ -349,8 +379,9 @@ class MemoryMiddleware:
 
             memory_block = ""
             injected_tokens = 0
+            injected_facts: list[Fact] = []
 
-            if candidate_facts:
+            if core_facts or episodic_facts:
                 header = (
                     "[EdgeMem Active Memory]\n"
                     "Earlier-turn constraints & facts (follow these unless the latest user message "
@@ -359,23 +390,33 @@ class MemoryMiddleware:
 
                 seen_vals: set[str] = set()
                 fact_lines: list[str] = []
-                for f in candidate_facts:
+
+                for f in core_facts:
                     norm = _normalize_fact_value(f.value)
                     if norm in seen_vals:
                         continue
-                    seen_vals.add(norm)
-                    fact_lines.append(_format_fact_line(f))
+                    test_lines = fact_lines + [_format_fact_line(f)]
+                    test_block = header + "\n" + "\n".join(test_lines)
+                    if estimate_tokens(test_block) <= self.config.max_injected_tokens:
+                        seen_vals.add(norm)
+                        fact_lines.append(_format_fact_line(f))
+                        injected_facts.append(f)
 
-                while fact_lines:
-                    test_block = header + "\n" + "\n".join(fact_lines)
-                    tok_count = estimate_tokens(test_block)
-                    if tok_count <= self.config.max_injected_tokens:
-                        break
-                    fact_lines.pop()
+                for f in episodic_facts:
+                    norm = _normalize_fact_value(f.value)
+                    if norm in seen_vals:
+                        continue
+                    test_lines = fact_lines + [_format_fact_line(f)]
+                    test_block = header + "\n" + "\n".join(test_lines)
+                    if estimate_tokens(test_block) <= self.config.max_injected_tokens:
+                        seen_vals.add(norm)
+                        fact_lines.append(_format_fact_line(f))
+                        injected_facts.append(f)
 
                 if fact_lines:
                     memory_block = header + "\n" + "\n".join(fact_lines)
                     injected_tokens = estimate_tokens(memory_block)
+                    self.store.record_access([f.id for f in injected_facts])
 
             if not memory_block and compacted_turns == 0:
                 return body, {

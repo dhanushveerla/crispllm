@@ -135,6 +135,7 @@ def create_mcp_server(
         kind: str = "note",
         scope: str = "global",
         pinned: bool = True,
+        tier: str = "episodic",
     ) -> dict:
         """Store a fact, constraint, or note in EdgeMem tiered memory.
 
@@ -144,8 +145,15 @@ def create_mcp_server(
             kind: Type of fact: 'constraint', 'constant', 'signature', 'decision', 'note'.
             scope: Accessibility scope: 'global', 'project', or 'session'.
             pinned: Whether this fact is persistently injected into prompts.
+            tier: Memory tier ('core', 'episodic', 'archival'). If 'core', sets pinned=True and source='user'.
         """
         store = _get_store()
+        source = "auto"
+        if tier == "core":
+            pinned = True
+            source = "user"
+        elif pinned:
+            source = "user"
         fid = store.upsert_fact(
             session_id="global",
             key=key,
@@ -153,19 +161,26 @@ def create_mcp_server(
             kind=kind,
             scope=scope,
             pinned=pinned,
+            tier=tier,
+            source=source,
         )
         return {"status": "ok", "fact_id": fid, "key": key}
 
     @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-    async def edgemem_recall(query: str, limit: int = 8) -> dict:
+    async def edgemem_recall(
+        query: str, limit: int = 8, include_archival: bool = False
+    ) -> dict:
         """Search EdgeMem memory for relevant facts using BM25 FTS5 ranking.
 
         Args:
             query: Search query or prompt.
             limit: Maximum number of matches to return.
+            include_archival: Whether to include Tier 3 Archival facts in the search results.
         """
         store = _get_store()
-        facts = store.search_facts(query=query, limit=limit)
+        facts = store.search_facts(
+            query=query, limit=limit, include_archival=include_archival
+        )
         return {
             "query": query,
             "facts": [
@@ -177,21 +192,32 @@ def create_mcp_server(
                     "value": f.value,
                     "scope": f.scope,
                     "pinned": f.pinned,
+                    "tier": f.tier,
+                    "status": f.status,
                 }
                 for f in facts
             ],
         }
 
     @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-    async def edgemem_list_facts(kind: str | None = None, limit: int = 20) -> dict:
+    async def edgemem_list_facts(
+        kind: str | None = None,
+        limit: int = 20,
+        tier: str | None = None,
+        include_archival: bool = False,
+    ) -> dict:
         """List stored facts in EdgeMem memory.
 
         Args:
             kind: Optional filter by kind: 'constraint', 'constant', 'signature', 'decision', 'note'.
             limit: Maximum facts to return.
+            tier: Optional filter by tier: 'core', 'episodic', 'archival'.
+            include_archival: Whether to include archived facts.
         """
         store = _get_store()
-        facts = store.list_facts(kind=kind, limit=limit)
+        facts = store.list_facts(
+            kind=kind, limit=limit, tier=tier, include_archival=include_archival
+        )
         return {
             "facts": [
                 {
@@ -202,6 +228,8 @@ def create_mcp_server(
                     "value": f.value,
                     "scope": f.scope,
                     "pinned": f.pinned,
+                    "tier": f.tier,
+                    "status": f.status,
                 }
                 for f in facts
             ]

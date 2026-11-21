@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from edgemem.config import EdgeMemConfig
+from edgemem.memory.consolidator import ConsolidationWorker, MemoryConsolidator
 from edgemem.memory.store import MemoryStore
 from edgemem.privacy.redactor import (
     RedactionConfig,
@@ -275,6 +276,9 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
     redactor = SecretRedactor(redaction_config)
     counters = ProxyCounters()
 
+    consolidator = MemoryConsolidator(store=memory_store, config=cfg)
+    consolidation_worker = ConsolidationWorker(consolidator=consolidator, config=cfg)
+
     mcp_server = create_mcp_server(memory_store=memory_store, config=cfg)
     mcp_app = create_mcp_starlette_app(mcp_server)
 
@@ -296,15 +300,20 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         app.state.edgemem_telemetry_store = telemetry_store
         app.state.edgemem_memory_store = memory_store
         app.state.edgemem_memory_middleware = memory_middleware
+        app.state.edgemem_consolidation_worker = consolidation_worker
         app.state.edgemem_router = router
         app.state.edgemem_redactor = redactor
         app.state.edgemem_counters = counters
+
+        if cfg.memory.enabled and cfg.memory.consolidation_enabled:
+            consolidation_worker.start()
 
         try:
             session_mgr = mcp_server.session_manager
             async with session_mgr.run():
                 yield
         finally:
+            await consolidation_worker.stop()
             await client.aclose()
             memory_store.close()
             telemetry_store.close()
@@ -315,6 +324,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
     app.state.edgemem_config = cfg
     app.state.edgemem_memory_store = memory_store
     app.state.edgemem_memory_middleware = memory_middleware
+    app.state.edgemem_consolidation_worker = consolidation_worker
     app.state.edgemem_router = router
     app.state.edgemem_redactor = redactor
     app.state.edgemem_counters = counters
@@ -334,6 +344,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 "rss_mb": round(get_rss_mb(), 2),
                 "memory_enabled": c.memory.enabled,
                 "facts_count": mem_stats["facts_count"],
+                "memory_tiers": mem_store.tier_counts(),
                 "privacy_enabled": c.privacy.enabled,
                 "cloud_enabled": c.cloud.enabled,
                 "local_requests": stats["local_requests"],
@@ -410,6 +421,9 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
             target.reason,
         )
 
+        worker: ConsolidationWorker | None = getattr(
+            request.app.state, "edgemem_consolidation_worker", None
+        )
         if is_stream:
             return await _handle_streaming_request(
                 client,
@@ -428,9 +442,10 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 est_tokens_sent,
                 tokens_saved,
                 compacted_turns,
+                worker=worker,
             )
         else:
-            return await _handle_non_streaming_request(
+            resp = await _handle_non_streaming_request(
                 client,
                 body,
                 target,
@@ -448,6 +463,9 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 tokens_saved,
                 compacted_turns,
             )
+            if worker is not None:
+                worker.notify_turn()
+            return resp
 
     app.mount("", mcp_app)
     return app
@@ -661,6 +679,7 @@ async def _handle_streaming_request(
     est_tokens_sent: int,
     tokens_saved: int,
     compacted_turns: int,
+    worker: ConsolidationWorker | None = None,
 ) -> StreamingResponse:
     fallback_target = (
         router.cloud_fallback_target(body) if target.tier == "local" else None
@@ -776,6 +795,9 @@ async def _handle_streaming_request(
                 fallback_used=1 if fallback_used else 0,
                 latency_ms=round(timer.total_ms, 2),
             )
+
+            if worker is not None:
+                worker.notify_turn()
 
     return StreamingResponse(
         generate(),
