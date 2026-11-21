@@ -22,6 +22,7 @@ import hashlib
 import logging
 import os
 import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -57,7 +58,7 @@ def render_tree_context(
 ) -> str:
     try:
         tc = TreeContext(
-            filename=filename,
+            filename=Path(filename).as_posix(),
             code=code,
             color=False,
             verbose=False,
@@ -82,9 +83,6 @@ def render_tree_context(
             matched = matched[:max_lines]
         return "\n".join(matched)
 
-# ---------------------------------------------------------------------------
-# Token counting
-# ---------------------------------------------------------------------------
 
 _ENCODINGS: dict[str, tiktoken.Encoding] = {}
 
@@ -96,7 +94,7 @@ def _get_enc(model_name: str = "cl100k_base") -> tiktoken.Encoding:
             for cand in [
                 Path(user_cache_dir("edgemem")) / "tiktoken",
                 Path.home() / ".cache" / "tiktoken",
-                Path("/tmp/data-gym-cache"),
+                Path(tempfile.gettempdir()) / "data-gym-cache",
             ]:
                 if cand.exists():
                     os.environ["TIKTOKEN_CACHE_DIR"] = str(cand)
@@ -110,9 +108,6 @@ def count_tokens(text: str, model_name: str = "cl100k_base") -> int:
     return len(enc.encode(text, disallowed_special=()))
 
 
-# ---------------------------------------------------------------------------
-# Query → identifier token extraction
-# ---------------------------------------------------------------------------
 
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{1,}")
 
@@ -122,16 +117,13 @@ def extract_query_tokens(query: str) -> list[str]:
     return _IDENT_RE.findall(query)
 
 
-# ---------------------------------------------------------------------------
-# Single-file outline via grep-ast TreeContext
-# ---------------------------------------------------------------------------
 
 def file_outline(
     abs_path: Path,
     rel_path: str | None = None,
     cache: OutlineCache | None = None,
 ) -> str:
-    rp = rel_path or str(abs_path)
+    rp = (Path(rel_path).as_posix() if rel_path else Path(abs_path).as_posix()).replace("\\", "/")
     try:
         st = abs_path.stat()
     except OSError:
@@ -195,9 +187,6 @@ class RepoMap:
         self._enc: tiktoken.Encoding | None = None
         self._cached_raw_tokens: int | None = None
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def get_repo_map(
         self,
@@ -208,6 +197,9 @@ class RepoMap:
     ) -> str:
         t0 = time.perf_counter()
 
+        if focus_files:
+            focus_files = [Path(f).as_posix().replace("\\", "/") for f in focus_files]
+
         all_files = scan_repo_files(self.repo_path)
         if not all_files:
             return ""
@@ -215,9 +207,9 @@ class RepoMap:
         file_stats: list[tuple[str, int, int]] = []
         for fpath in all_files:
             try:
-                rel = str(fpath.relative_to(self.repo_path))
+                rel = fpath.relative_to(self.repo_path).as_posix()
             except ValueError:
-                rel = str(fpath)
+                rel = fpath.as_posix()
             try:
                 st = fpath.stat()
                 file_stats.append((rel, st.st_mtime_ns, st.st_size))
@@ -240,9 +232,9 @@ class RepoMap:
 
             for fpath in all_files:
                 try:
-                    rel = str(fpath.relative_to(self.repo_path))
+                    rel = fpath.relative_to(self.repo_path).as_posix()
                 except ValueError:
-                    rel = str(fpath)
+                    rel = fpath.as_posix()
 
                 cached = self._cache.get(fpath)
                 if cached is not None:
@@ -343,6 +335,7 @@ class RepoMap:
         def_tags: list[Tag],
         rank: float,
     ) -> tuple[str, int]:
+        rel_path = Path(rel_path).as_posix().replace("\\", "/")
         abs_path = self.repo_path / rel_path
         try:
             st = abs_path.stat()
@@ -455,9 +448,9 @@ class RepoMap:
                     text = fpath.read_text(encoding="utf-8", errors="replace")
                     tok_cnt = self._count(text)
                     try:
-                        rel = str(fpath.relative_to(self.repo_path))
+                        rel = fpath.relative_to(self.repo_path).as_posix()
                     except ValueError:
-                        rel = str(fpath)
+                        rel = fpath.as_posix()
                     tags = extract_tags(fpath, rel, content=text)
                     self._cache.put(fpath, tags, token_count=tok_cnt)
                     total += tok_cnt
@@ -466,3 +459,15 @@ class RepoMap:
 
         self._cached_raw_tokens = total
         return total
+
+    def close(self) -> None:
+        if hasattr(self, "_cache") and self._cache is not None:
+            self._cache.close()
+        if hasattr(self, "outline_cache") and self.outline_cache is not None:
+            self.outline_cache.close()
+
+    def __enter__(self) -> RepoMap:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()

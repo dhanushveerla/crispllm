@@ -20,8 +20,6 @@ import httpx
 
 logger = logging.getLogger("edgemem.proxy.streaming")
 
-# Heartbeat interval (seconds) — sent as SSE comment while waiting for
-# the first upstream byte during stream: true requests.
 HEARTBEAT_INTERVAL_S: float = 10.0
 
 
@@ -105,10 +103,8 @@ async def stream_sse_passthrough(
                 first = False
             yield line + "\n\n"
         elif line == "":
-            # Empty line = SSE event boundary, already handled by "\n\n" above
             continue
         elif line.startswith(":"):
-            # SSE comment line — pass through
             yield line + "\n"
 
 
@@ -159,7 +155,7 @@ async def stream_with_heartbeat(
             logger.exception("Upstream streaming error")
             await queue.put(exc)
         finally:
-            await queue.put(None)  # Sentinel
+            await queue.put(None)
 
     async def _heartbeat_sender() -> None:
         """Push keepalive comments into the queue until first data arrives."""
@@ -169,11 +165,10 @@ async def stream_with_heartbeat(
                     first_data_event.wait(),
                     timeout=heartbeat_interval,
                 )
-                return  # First data arrived
+                return
             except asyncio.TimeoutError:
                 await queue.put(": keepalive\n\n")
 
-    # Run both tasks concurrently
     upstream_task = asyncio.ensure_future(_upstream_reader())
     heartbeat_task = asyncio.ensure_future(_heartbeat_sender())
 
@@ -189,7 +184,6 @@ async def stream_with_heartbeat(
         heartbeat_task.cancel()
         if not upstream_task.done():
             upstream_task.cancel()
-        # Suppress CancelledError from cleanup
         try:
             await heartbeat_task
         except (asyncio.CancelledError, Exception):
@@ -221,7 +215,6 @@ def count_output_tokens_from_sse(sse_line: str) -> int:
     except json.JSONDecodeError:
         return 0
 
-    # Prefer usage field if present (some providers include it in final chunk)
     usage = data.get("usage")
     if usage and "completion_tokens" in usage:
         return usage["completion_tokens"]

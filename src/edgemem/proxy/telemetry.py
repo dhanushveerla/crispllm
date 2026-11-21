@@ -267,7 +267,7 @@ class TelemetryLogger:
         self._records.append(record)
         self._ensure_dir()
         try:
-            with open(self._log_file, "a") as f:
+            with open(self._log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(asdict(record)) + "\n")
         except OSError:
             pass

@@ -1,4 +1,4 @@
-"""EdgeMem CLI — console entrypoint.
+"""EdgeMem CLI - console entrypoint.
 
 Supports: edgemem serve, edgemem init, edgemem status, edgemem stats, edgemem slice, edgemem memory.
 """
@@ -18,7 +18,7 @@ from edgemem.config import EdgeMemConfig, default_toml_content, load_config
 @click.group()
 @click.version_option(package_name="edgemem")
 def cli() -> None:
-    """EdgeMem — Lightweight unified memory & context proxy."""
+    """EdgeMem - Lightweight unified memory & context proxy."""
 
 
 @cli.command()
@@ -38,7 +38,7 @@ def serve(host: str | None, port: int | None, config_path: Path | None) -> None:
     from edgemem.proxy.app import create_app
 
     app = create_app(cfg)
-    click.echo(f"EdgeMem proxy → {cfg.upstream_base_url} (model: {cfg.model})")
+    click.echo(f"EdgeMem proxy -> {cfg.upstream_base_url} (model: {cfg.model})")
     click.echo(f"Listening on http://{cfg.host}:{cfg.port}")
     click.echo(f"MCP endpoint: http://{cfg.host}:{cfg.port}/mcp")
     uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="info")
@@ -80,7 +80,7 @@ def init(preset: str, output: Path, force: bool) -> None:
 
     content = default_toml_content(preset)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(content)
+    output.write_text(content, encoding="utf-8", newline="\n")
     click.echo(f"Created {output} (preset: {preset})")
     click.echo("Start EdgeMem with:")
     preset_lower = preset.lower()
@@ -231,15 +231,15 @@ def slice(
     t0 = time.perf_counter()
 
     rm = RepoMap(repo_path=path, max_tokens=tokens, model_name=model)
-
-    # Raw token count (before slicing)
-    raw_tokens = rm.raw_token_count()
-
-    repo_map = rm.get_repo_map(
-        focus_files=list(focus_files) or None,
-        mentioned_symbols=None,
-        query=query,
-    )
+    try:
+        raw_tokens = rm.raw_token_count()
+        repo_map = rm.get_repo_map(
+            focus_files=list(focus_files) or None,
+            mentioned_symbols=None,
+            query=query,
+        )
+    finally:
+        rm.close()
 
     elapsed_ms = (time.perf_counter() - t0) * 1000
     sliced_tokens = count_tokens(repo_map, model)
@@ -248,10 +248,8 @@ def slice(
         if raw_tokens > 0 else 0.0
     )
 
-    # Map to stdout
     click.echo(repo_map, nl=False)
 
-    # Stats to stderr
     click.echo(
         f"\n[EdgeMem slice] raw={raw_tokens:,} tok  sliced={sliced_tokens:,} tok  "
         f"compression={compression_pct:.1f}%  latency={elapsed_ms:.0f}ms",

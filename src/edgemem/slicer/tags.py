@@ -10,9 +10,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Sequence
 
-# ---------------------------------------------------------------------------
-# Language mapping: file extension → tree-sitter language name
-# ---------------------------------------------------------------------------
 
 _EXT_TO_LANG: dict[str, str] = {
     ".py":   "python",
@@ -41,7 +38,7 @@ _EXT_TO_LANG: dict[str, str] = {
     ".scala":"scala",
     ".php":  "php",
     ".r":    "r",
-    ".toml": None,  # explicitly unsupported (no grammar)
+    ".toml": None,
     ".json": None,
     ".yaml": None,
     ".yml":  None,
@@ -49,10 +46,8 @@ _EXT_TO_LANG: dict[str, str] = {
     ".txt":  None,
 }
 
-# Minimum bytes for a file to be considered worth parsing
 _MIN_FILE_BYTES = 4
 
-# Binary file detection: if >5% of the first 8 KB is non-text, skip
 _BINARY_SAMPLE = 8192
 _BINARY_THRESHOLD = 0.05
 
@@ -74,29 +69,22 @@ def _lang_for_path(path: Path) -> str | None:
     return _EXT_TO_LANG[ext]
 
 
-# ---------------------------------------------------------------------------
-# Tag dataclass
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Tag:
     """A single definition or reference extracted from a source file."""
-    rel_path: str           # path relative to repo root
-    abs_path: str           # absolute path
-    name: str               # symbol name (class, function, variable…)
-    line: int               # 0-based line number
-    kind: str               # 'def' | 'ref'
-    info: str = ""          # optional: return type, signature snippet, etc.
+    rel_path: str
+    abs_path: str
+    name: str
+    line: int
+    kind: str
+    info: str = ""
+
+    def __post_init__(self) -> None:
+        self.rel_path = Path(self.rel_path).as_posix().replace("\\", "/")
 
 
-# ---------------------------------------------------------------------------
-# tree-sitter query strings per language (definition node types)
-# ---------------------------------------------------------------------------
 
-# Queries capture definition nodes; we also capture identifiers as references.
-# Format: list of (node_type, capture_name) used in a simple node-walk
-# (tree-sitter queries require a compiled language object; we use a simpler
-# node-type walk so we don't need language-specific .scm query files).
 
 _DEF_NODE_TYPES: dict[str, set[str]] = {
     "python": {
@@ -157,7 +145,6 @@ _DEF_NODE_TYPES: dict[str, set[str]] = {
     "r": {"binary"},
 }
 
-# Identifier node types (used for reference extraction)
 _IDENT_NODE_TYPES: dict[str, set[str]] = {
     "python": {"identifier"},
     "javascript": {"identifier", "property_identifier"},
@@ -180,7 +167,6 @@ _IDENT_NODE_TYPES: dict[str, set[str]] = {
     "r": {"identifier"},
 }
 
-# Name child field priorities per language for extracting the symbol name
 _NAME_CHILD_FIELD: dict[str, str] = {
     "python": "name",
     "javascript": "name",
@@ -207,7 +193,7 @@ _NAME_CHILD_FIELD: dict[str, str] = {
 def _get_parser(lang: str):
     """Return a tree-sitter Parser for the given language, or None."""
     try:
-        from tree_sitter_language_pack import get_parser  # type: ignore
+        from tree_sitter_language_pack import get_parser
         return get_parser(lang)
     except Exception:
         return None
@@ -218,7 +204,6 @@ def _find_ident_node(node):
     if node.type in ("identifier", "type_identifier", "field_identifier", "name"):
         return node
     for c in node.children:
-        # Don't descend into parameters or bodies when locating definition name
         if c.type in ("parameters", "parameter_list", "block", "compound_statement", "statement_block", "field_declaration_list"):
             continue
         res = _find_ident_node(c)
@@ -288,6 +273,7 @@ def extract_tags(
     rel_path: str,
     content: str | None = None,
 ) -> list[Tag]:
+    rel_path = Path(rel_path).as_posix().replace("\\", "/")
     """
     Extract definition and reference tags from a source file.
 
@@ -310,7 +296,6 @@ def extract_tags(
     tags: list[Tag] = []
 
     if lang is None:
-        # No grammar — return simple regex-based defs for Python at least
         return _regex_fallback_tags(text, rel_path, str(abs_path))
 
     parser = _get_parser(lang)
@@ -355,9 +340,6 @@ def _regex_fallback_tags(text: str, rel_path: str, abs_path: str) -> list[Tag]:
     return tags
 
 
-# ---------------------------------------------------------------------------
-# File scanning helpers (shared with repomap.py)
-# ---------------------------------------------------------------------------
 
 _IGNORE_DIRS: frozenset[str] = frozenset({
     ".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ruff_cache",
@@ -417,7 +399,6 @@ def scan_repo_files(
 
     for root, dirs, filenames in __import__("os").walk(repo_root):
         root_path = Path(root)
-        # Filter dirs in-place
         dirs[:] = [
             d for d in dirs
             if d not in ignore_dirs
@@ -439,7 +420,7 @@ def scan_repo_files(
 
 def _is_gitignored(path: Path, root: Path, patterns: list[re.Pattern]) -> bool:
     try:
-        rel = str(path.relative_to(root)).replace("\\", "/")
+        rel = path.relative_to(root).as_posix()
     except ValueError:
         return False
     for pat in patterns:

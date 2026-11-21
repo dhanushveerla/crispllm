@@ -16,9 +16,6 @@ import networkx as nx
 from edgemem.slicer.tags import Tag
 
 
-# ---------------------------------------------------------------------------
-# Graph construction
-# ---------------------------------------------------------------------------
 
 def build_symbol_graph(tags: Iterable[Tag]) -> nx.DiGraph:
     """
@@ -34,11 +31,8 @@ def build_symbol_graph(tags: Iterable[Tag]) -> nx.DiGraph:
     This means well-connected files (many symbols referenced by many others)
     accumulate higher PageRank and appear first in the sliced context.
     """
-    # symbol_name → set of rel_paths that define it
     defines: dict[str, set[str]] = defaultdict(set)
-    # rel_path → set of symbol names referenced
     references: dict[str, set[str]] = defaultdict(set)
-    # collect all files
     all_files: set[str] = set()
 
     for tag in tags:
@@ -94,7 +88,9 @@ def compute_pagerank(
     if n == 1:
         return {nodes[0]: 1.0}
 
-    # Build normalised personalisation vector
+    if personalization is not None:
+        from pathlib import Path
+        personalization = {Path(k).as_posix().replace("\\", "/"): v for k, v in personalization.items()}
     if personalization:
         total_p = sum(personalization.values())
         if total_p <= 0:
@@ -106,31 +102,25 @@ def compute_pagerank(
     else:
         p_vec = {node: 1.0 / n for node in nodes}
 
-    # Initialise rank vector
     ranks: dict[str, float] = {node: 1.0 / n for node in nodes}
 
-    # Pre-compute out-weight sums
     out_w: dict[str, float] = {}
     for node in nodes:
         out_w[node] = sum(
             G[node][t].get("weight", 1.0) for t in G.successors(node)
         )
 
-    # Power iteration
     for _ in range(max_iter):
         new_ranks: dict[str, float] = {}
         dangling_sum = sum(ranks[node] for node in nodes if out_w[node] == 0.0)
 
         for node in nodes:
-            # Teleportation + dangling redistribution
             rank_val = (1.0 - alpha) * p_vec[node] + alpha * dangling_sum * p_vec[node]
-            # In-link contributions
             for src in G.predecessors(node):
                 w = G[src][node].get("weight", 1.0)
                 rank_val += alpha * ranks[src] * (w / out_w[src])
             new_ranks[node] = rank_val
 
-        # Check convergence
         diff = sum(abs(new_ranks[node] - ranks[node]) for node in nodes)
         ranks = new_ranks
         if diff < n * tol:
@@ -144,7 +134,8 @@ import re
 
 def is_test_file(rel_path: str) -> bool:
     """Check if a file path is a test file or test suite."""
-    p = rel_path.replace("\\", "/").lower()
+    from pathlib import Path
+    p = Path(rel_path).as_posix().replace("\\", "/").lower()
     parts = p.split("/")
     filename = parts[-1]
     for part in parts[:-1]:
@@ -186,8 +177,9 @@ def find_matching_files(
     scores: dict[str, int] = defaultdict(int)
 
     if focus_files:
+        from pathlib import Path
         for f in focus_files:
-            clean_f = f.replace("\\", "/").strip()
+            clean_f = Path(f).as_posix().replace("\\", "/").strip()
             for af in all_files:
                 if af == clean_f or af.endswith("/" + clean_f) or clean_f in af:
                     scores[af] += 5

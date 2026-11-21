@@ -170,7 +170,6 @@ class MemoryStore:
             )
             fact_id = int(cur.fetchone()[0])
 
-            # Synchronize FTS5 virtual table explicitly inside the same transaction
             self._conn.execute("DELETE FROM memory_fts WHERE fact_id = ?;", (str(fact_id),))
             content = f"{key} {value}"
             self._conn.execute(
@@ -374,7 +373,7 @@ class MemoryStore:
         with self._lock:
             if hasattr(self, "_conn") and self._conn is not None:
                 self._conn.close()
-                self._conn = None  # type: ignore[assignment]
+                self._conn = None
 
     def __enter__(self) -> MemoryStore:
         return self

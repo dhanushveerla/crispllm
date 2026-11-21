@@ -6,6 +6,8 @@ composed inside the FastAPI app's lifespan.
 
 from __future__ import annotations
 
+from pathlib import Path
+import sys
 from typing import TYPE_CHECKING, Any
 
 from mcp.server.mcpserver import MCPServer
@@ -38,6 +40,33 @@ DESTRUCTIVE_ANNOTATIONS = ToolAnnotations(
 )
 
 
+def is_within_allowed_roots(target: Path | str, allowed_roots: list[str]) -> bool:
+    if not allowed_roots:
+        return True
+    target_path = Path(target)
+    try:
+        t_resolved = target_path.resolve()
+    except Exception:
+        t_resolved = target_path
+
+    for root_str in allowed_roots:
+        try:
+            r_resolved = Path(root_str).resolve()
+            if sys.platform == "win32" or (len(t_resolved.parts) > 0 and ":" in t_resolved.parts[0]):
+                t_parts = [p.lower().replace("/", "\\") for p in t_resolved.parts]
+                r_parts = [p.lower().replace("/", "\\") for p in r_resolved.parts]
+                if len(t_parts) >= len(r_parts) and t_parts[:len(r_parts)] == r_parts:
+                    return True
+            try:
+                if t_resolved == r_resolved or t_resolved.is_relative_to(r_resolved):
+                    return True
+            except (ValueError, OSError):
+                pass
+        except Exception:
+            continue
+    return False
+
+
 def create_mcp_server(
     memory_store: MemoryStore | None = None,
     config: Any = None,
@@ -63,10 +92,10 @@ def create_mcp_server(
             _memory_ref["store"] = MemoryStore()
         return _memory_ref["store"]
 
-    mcp._edgemem_set_telemetry = set_telemetry  # type: ignore[attr-defined]
-    mcp._edgemem_telemetry_ref = _telemetry_ref  # type: ignore[attr-defined]
-    mcp._edgemem_set_memory = set_memory  # type: ignore[attr-defined]
-    mcp._edgemem_memory_ref = _memory_ref  # type: ignore[attr-defined]
+    setattr(mcp, "_edgemem_set_telemetry", set_telemetry)
+    setattr(mcp, "_edgemem_telemetry_ref", _telemetry_ref)
+    setattr(mcp, "_edgemem_set_memory", set_memory)
+    setattr(mcp, "_edgemem_memory_ref", _memory_ref)
 
     @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
     async def edgemem_status() -> dict:
@@ -224,39 +253,38 @@ def create_mcp_server(
             getattr(config, "security", None), "allowed_repo_roots", []
         )
         rp = Path(repo_path).resolve()
-        if allowed_roots:
-            resolved_roots = [Path(r).resolve() for r in allowed_roots]
-            if not any(
-                rp == root or rp.is_relative_to(root) for root in resolved_roots
-            ):
-                return {
-                    "error": f"Path '{repo_path}' is not within allowed repository roots"
-                }
+        if not is_within_allowed_roots(rp, allowed_roots):
+            return {
+                "error": f"Path '{repo_path}' is not within allowed repository roots"
+            }
 
         t0 = time.perf_counter()
         if not rp.is_dir():
             return {"error": f"Not a directory: {repo_path}"}
 
         rm = RepoMap(repo_path=rp, max_tokens=max_tokens)
-        raw_tokens = rm.raw_token_count()
-        repo_map_text = rm.get_repo_map(
-            focus_files=focus_files,
-            mentioned_symbols=None,
-            query=query,
-        )
-        sliced_tokens = count_tokens(repo_map_text)
-        elapsed_ms = (time.perf_counter() - t0) * 1000
-        compression_pct = (
-            (raw_tokens - sliced_tokens) / raw_tokens * 100.0
-            if raw_tokens > 0 else 0.0
-        )
-        return {
-            "repo_map":        repo_map_text,
-            "sliced_tokens":   sliced_tokens,
-            "raw_tokens":      raw_tokens,
-            "compression_pct": round(compression_pct, 2),
-            "latency_ms":      round(elapsed_ms, 1),
-        }
+        try:
+            raw_tokens = rm.raw_token_count()
+            repo_map_text = rm.get_repo_map(
+                focus_files=focus_files,
+                mentioned_symbols=None,
+                query=query,
+            )
+            sliced_tokens = count_tokens(repo_map_text)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            compression_pct = (
+                (raw_tokens - sliced_tokens) / raw_tokens * 100.0
+                if raw_tokens > 0 else 0.0
+            )
+            return {
+                "repo_map":        repo_map_text,
+                "sliced_tokens":   sliced_tokens,
+                "raw_tokens":      raw_tokens,
+                "compression_pct": round(compression_pct, 2),
+                "latency_ms":      round(elapsed_ms, 1),
+            }
+        finally:
+            rm.close()
 
     @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
     async def edgemem_file_outline(file_path: str) -> dict:
@@ -284,14 +312,10 @@ def create_mcp_server(
             getattr(config, "security", None), "allowed_repo_roots", []
         )
         fp = Path(file_path).resolve()
-        if allowed_roots:
-            resolved_roots = [Path(r).resolve() for r in allowed_roots]
-            if not any(
-                fp == root or fp.is_relative_to(root) for root in resolved_roots
-            ):
-                return {
-                    "error": f"Path '{file_path}' is not within allowed repository roots"
-                }
+        if not is_within_allowed_roots(fp, allowed_roots):
+            return {
+                "error": f"Path '{file_path}' is not within allowed repository roots"
+            }
 
         if not fp.is_file():
             return {"error": f"Not a file: {file_path}"}

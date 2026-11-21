@@ -118,7 +118,6 @@ def _format_fact_line(fact: Fact) -> str:
     val = fact.value.strip()
     if fact.kind in ("constraint", "note"):
         return f"- {val}"
-    # For constants or signatures: if val already starts with identifier or def/class, render directly
     if (
         val.startswith(fact.key)
         or val.startswith(f"def {fact.key}")
@@ -200,8 +199,6 @@ class MemoryMiddleware:
             last_user_idx = user_indices[-1]
             last_user_text = _get_message_text(messages[last_user_idx])
 
-            # Stop single-turn self-duplication:
-            # If request has only 1 user message and no saved facts exist, skip injection completely.
             if len(user_indices) == 1:
                 existing_facts = self.store.list_facts(session_id=session_id, limit=1)
                 global_pinned = self.store.get_pinned_facts(
@@ -214,7 +211,6 @@ class MemoryMiddleware:
                         "compacted_turns": 0,
                     }
 
-            # 1. Auto-extract facts from turns strictly before final user message
             facts_extracted = 0
             if self.config.auto_extract and len(user_indices) > 1:
                 extracted = extract_facts_from_messages(messages)
@@ -230,7 +226,6 @@ class MemoryMiddleware:
                     )
                 facts_extracted = len(extracted)
 
-            # 2. Retrieve facts to inject: pinned constraints first, then BM25 search
             candidate_facts: list[Fact] = []
             seen_keys: set[tuple[str, str]] = set()
 
@@ -257,8 +252,6 @@ class MemoryMiddleware:
                         seen_keys.add(k)
                         candidate_facts.append(f)
 
-            # 3. Middle-turn compaction (FR-04):
-            # When conversation contains >= 3 user messages, compact middle distractor turns into episodes.
             compacted_turns = 0
             new_messages = copy.deepcopy(messages)
 
@@ -354,7 +347,6 @@ class MemoryMiddleware:
 
                     idx += 1
 
-            # 4. Format active memory block and enforce token budget
             memory_block = ""
             injected_tokens = 0
 
@@ -385,7 +377,6 @@ class MemoryMiddleware:
                     memory_block = header + "\n" + "\n".join(fact_lines)
                     injected_tokens = estimate_tokens(memory_block)
 
-            # If nothing was injected and no turns were compacted, return original body
             if not memory_block and compacted_turns == 0:
                 return body, {
                     "facts_extracted": facts_extracted,
@@ -393,7 +384,6 @@ class MemoryMiddleware:
                     "compacted_turns": 0,
                 }
 
-            # 5. Non-destructive prompt injection
             new_body = dict(body)
             if memory_block:
                 first_msg = new_messages[0]

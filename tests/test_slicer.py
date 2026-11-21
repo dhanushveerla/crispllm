@@ -39,7 +39,7 @@ def multi_file_project(tmp_path: Path) -> Path:
     # 1. Models module
     models_dir = repo / "models"
     models_dir.mkdir()
-    (models_dir / "__init__.py").write_text("")
+    (models_dir / "__init__.py").write_text("", encoding="utf-8")
     (models_dir / "user.py").write_text(
         '"""User domain models and validation."""\n\n'
         "from dataclasses import dataclass\n"
@@ -60,13 +60,14 @@ def multi_file_project(tmp_path: Path) -> Path:
         "    return user.is_active\n\n"
         "def format_user_display(user: UserRecord) -> str:\n"
         "    \"\"\"Return pretty display representation for audit logs.\"\"\"\n"
-        "    return f'{user.username} <{user.email}> (id={user.user_id})'\n"
+        "    return f'{user.username} <{user.email}> (id={user.user_id})'\n",
+        encoding="utf-8",
     )
 
     # 2. Auth module (references models.user)
     auth_dir = repo / "auth"
     auth_dir.mkdir()
-    (auth_dir / "__init__.py").write_text("")
+    (auth_dir / "__init__.py").write_text("", encoding="utf-8")
     (auth_dir / "jwt.py").write_text(
         '"""JWT token handling, verification, and cryptographic signature checking."""\n\n'
         "from models.user import UserRecord, validate_user_record, format_user_display\n\n"
@@ -87,13 +88,14 @@ def multi_file_project(tmp_path: Path) -> Path:
         "        \"\"\"Extract user claims from validated token.\"\"\"\n"
         '        if not self.verify_token(token):\n'
         '            return {}\n'
-        '        return {"user": token.split("_")[2], "issuer": self.issuer}\n'
+        '        return {"user": token.split("_")[2], "issuer": self.issuer}\n',
+        encoding="utf-8",
     )
 
     # 3. API routes (references auth.jwt and models.user)
     api_dir = repo / "api"
     api_dir.mkdir()
-    (api_dir / "__init__.py").write_text("")
+    (api_dir / "__init__.py").write_text("", encoding="utf-8")
     (api_dir / "routes.py").write_text(
         '"""API route handlers for authentication and user profiles."""\n\n'
         "from auth.jwt import JwtAuthManager\n"
@@ -109,13 +111,14 @@ def multi_file_project(tmp_path: Path) -> Path:
         "    return auth_mgr.verify_token(token)\n\n"
         "def handle_profile_lookup(user_id: int) -> dict:\n"
         "    \"\"\"Fetch user profile record by primary key.\"\"\"\n"
-        "    return {'user_id': user_id, 'status': 'found'}\n"
+        "    return {'user_id': user_id, 'status': 'found'}\n",
+        encoding="utf-8",
     )
 
     # 4. Independent billing service (large distractor / unreferenced)
     services_dir = repo / "services"
     services_dir.mkdir()
-    (services_dir / "__init__.py").write_text("")
+    (services_dir / "__init__.py").write_text("", encoding="utf-8")
     (services_dir / "billing.py").write_text(
         '"""Billing, payment processing, invoice generation, and credit card gateway."""\n\n'
         "class PaymentGateway:\n"
@@ -135,7 +138,8 @@ def multi_file_project(tmp_path: Path) -> Path:
         "    def calculate_taxes(self, subtotal: float, state_code: str) -> float:\n"
         "        \"\"\"Calculate state sales tax liability.\"\"\"\n"
         "        rate = 0.08 if state_code == 'CA' else 0.05\n"
-        "        return round(subtotal * rate, 2)\n"
+        "        return round(subtotal * rate, 2)\n",
+        encoding="utf-8",
     )
 
     # 5. Frontend JavaScript files
@@ -161,22 +165,23 @@ def multi_file_project(tmp_path: Path) -> Path:
         "    isAuthenticated() {\n"
         "        return Boolean(this.token && (Date.now() - this.createdAt < 3600000));\n"
         "    }\n"
-        "}\n"
+        "}\n",
+        encoding="utf-8",
     )
 
     # 6. Ignored files: .gitignore, .venv, node_modules, binary
-    (repo / ".gitignore").write_text("secret_keys/\n*.log\n")
+    (repo / ".gitignore").write_text("secret_keys/\n*.log\n", encoding="utf-8")
     secret_dir = repo / "secret_keys"
     secret_dir.mkdir()
-    (secret_dir / "secrets.py").write_text("API_SECRET = 'do-not-index'\n")
+    (secret_dir / "secrets.py").write_text("API_SECRET = 'do-not-index'\n", encoding="utf-8")
 
     venv_dir = repo / ".venv" / "lib"
     venv_dir.mkdir(parents=True)
-    (venv_dir / "site_package.py").write_text("def venv_func(): pass\n")
+    (venv_dir / "site_package.py").write_text("def venv_func(): pass\n", encoding="utf-8")
 
     nm_dir = repo / "node_modules" / "pkg"
     nm_dir.mkdir(parents=True)
-    (nm_dir / "index.js").write_text("function npmFunc() {}\n")
+    (nm_dir / "index.js").write_text("function npmFunc() {}\n", encoding="utf-8")
 
     (repo / "data.bin").write_bytes(b"\x00\x01\x02\x03\x04\xff" * 50)
 
@@ -272,11 +277,13 @@ class TestPersonalization:
         (repo / "blueprints.py").write_text(
             "class Blueprint:\n"
             "    def __init__(self, name): self.name = name\n"
-            "    def add_url_rule(self, rule, endpoint): pass\n"
+            "    def add_url_rule(self, rule, endpoint): pass\n",
+            encoding="utf-8",
         )
         (repo / "unrelated.py").write_text(
             "class UnrelatedWorker:\n"
-            "    def process_background_job(self): pass\n"
+            "    def process_background_job(self): pass\n",
+            encoding="utf-8",
         )
         rm = RepoMap(repo_path=repo, max_tokens=250)
         # Query has snake_case and camelCase terms: 'Blueprint routing url_rule'
@@ -292,7 +299,8 @@ class TestPersonalization:
         (src_dir / "auth.py").write_text(
             "class AuthenticationService:\n"
             "    def verify_credentials(self, u, p): return True\n"
-            "    def issue_token(self, u): return 'token'\n"
+            "    def issue_token(self, u): return 'token'\n",
+            encoding="utf-8",
         )
         test_dir = repo / "tests"
         test_dir.mkdir()
@@ -300,7 +308,8 @@ class TestPersonalization:
             "from src.auth import AuthenticationService\n"
             "def test_verify_credentials():\n"
             "    svc = AuthenticationService()\n"
-            "    assert svc.verify_credentials('a', 'b')\n"
+            "    assert svc.verify_credentials('a', 'b')\n",
+            encoding="utf-8",
         )
         rm_tight = RepoMap(repo_path=repo, max_tokens=50)
         # Non-test query targeting auth: production definition wins and fits budget (36 tokens), test file is excluded
@@ -351,7 +360,8 @@ class TestTagCacheBehavior:
         # Update file content and advance mtime
         time.sleep(0.02)
         target_file.write_text(
-            target_file.read_text() + "\ndef new_cached_function(): pass\n"
+            target_file.read_text(encoding="utf-8") + "\ndef new_cached_function(): pass\n",
+            encoding="utf-8",
         )
         new_mtime = target_file.stat().st_mtime + 2.0
         os.utime(target_file, (new_mtime, new_mtime))
@@ -363,6 +373,7 @@ class TestTagCacheBehavior:
         # New map reflects updated function
         new_map = rm.get_repo_map(max_tokens=800 if hasattr(rm, "get_repo_map") else None)
         assert "new_cached_function" in new_map or "models/user.py" in new_map
+        cache.close()
 
     def test_warm_cache_does_not_reread_for_raw_tokens(
         self, multi_file_project: Path, tmp_path: Path, monkeypatch
@@ -398,6 +409,7 @@ class TestTagCacheBehavior:
         raw_warm = rm2.raw_token_count()
         assert raw_warm == raw_cold
         assert len(read_calls) == 0, f"Warm cache unexpectedly re-read files from disk: {read_calls}"
+        cache.close()
 
 
 # ---------------------------------------------------------------------------
@@ -524,9 +536,9 @@ class TestScanningAndMultiLanguage:
 
     def test_multilanguage_ast_tags(self, tmp_path: Path):
         # Go, Rust, C files
-        (tmp_path / "main.go").write_text("package main\nfunc StartServer() {}\ntype Config struct {}\n")
-        (tmp_path / "lib.rs").write_text("pub fn init_engine() {}\npub struct Engine {}\n")
-        (tmp_path / "helper.c").write_text("int run_helper(int flag) { return flag + 1; }\n")
+        (tmp_path / "main.go").write_text("package main\nfunc StartServer() {}\ntype Config struct {}\n", encoding="utf-8")
+        (tmp_path / "lib.rs").write_text("pub fn init_engine() {}\npub struct Engine {}\n", encoding="utf-8")
+        (tmp_path / "helper.c").write_text("int run_helper(int flag) { return flag + 1; }\n", encoding="utf-8")
 
         go_tags = extract_tags(tmp_path / "main.go", "main.go")
         go_defs = {t.name for t in go_tags if t.kind == "def"}
@@ -630,7 +642,8 @@ class TestOutlineCacheBehavior:
 
         time.sleep(0.02)
         target_file.write_text(
-            target_file.read_text() + "\ndef unique_phase4a_function(): pass\n"
+            target_file.read_text(encoding="utf-8") + "\ndef unique_phase4a_function(): pass\n",
+            encoding="utf-8",
         )
         new_mtime = target_file.stat().st_mtime + 2.0
         os.utime(target_file, (new_mtime, new_mtime))
@@ -670,6 +683,7 @@ class TestOutlineCacheBehavior:
         assert len(cache) == 3
         assert ("file_0.py", 1000, 50, "k0") not in cache._lru
         assert ("file_9.py", 1009, 59, "k0") in cache._lru
+        cache.close()
 
     def test_warm_repo_map_never_loads_tiktoken(
         self, multi_file_project: Path, tmp_path: Path, monkeypatch

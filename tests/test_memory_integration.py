@@ -476,7 +476,8 @@ base_url = "http://127.0.0.1:11434/v1"
 [memory]
 enabled = true
 db_path = "{db_file}"
-"""
+""",
+        encoding="utf-8",
     )
 
     from edgemem.memory.store import MemoryStore
@@ -640,7 +641,7 @@ def test_stress_tasks_compaction_net_token_reduction() -> None:
     stress_tasks_file = Path(__file__).parent.parent / "bench" / "stress_tasks.json"
     assert stress_tasks_file.exists()
 
-    with open(stress_tasks_file) as f:
+    with open(stress_tasks_file, encoding="utf-8") as f:
         tasks = json.load(f)
 
     assert len(tasks) == 6

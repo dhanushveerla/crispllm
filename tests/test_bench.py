@@ -30,7 +30,7 @@ STRESS_TASKS_FILE = BENCH_DIR / "stress_tasks.json"
 @pytest.fixture(scope="module")
 def tasks() -> list[dict]:
     assert TASKS_FILE.exists(), f"bench_tasks.json not found at {TASKS_FILE}"
-    with open(TASKS_FILE) as f:
+    with open(TASKS_FILE, encoding="utf-8") as f:
         data = json.load(f)
     return data
 
@@ -38,7 +38,7 @@ def tasks() -> list[dict]:
 @pytest.fixture(scope="module")
 def stress_tasks() -> list[dict]:
     assert STRESS_TASKS_FILE.exists(), f"stress_tasks.json not found at {STRESS_TASKS_FILE}"
-    with open(STRESS_TASKS_FILE) as f:
+    with open(STRESS_TASKS_FILE, encoding="utf-8") as f:
         data = json.load(f)
     return data
 
@@ -156,17 +156,17 @@ def _run_test_in_tmpdir(
         for rel_path, content in task["files"].items():
             dest = tmp / rel_path
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(content)
+            dest.write_text(content, encoding="utf-8")
 
         # Overwrite with solution files
         for rel_path, code in solution_files.items():
             dest = tmp / rel_path
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(code)
+            dest.write_text(code, encoding="utf-8")
 
         # Write test_code
         test_file = tmp / "_test_runner_.py"
-        test_file.write_text(task["test_code"])
+        test_file.write_text(task["test_code"], encoding="utf-8")
 
         try:
             proc = subprocess.run(

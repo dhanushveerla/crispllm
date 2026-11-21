@@ -35,7 +35,7 @@ class ExtractedFact:
 
     key: str
     value: str
-    kind: str  # "constraint", "constant", "signature", etc.
+    kind: str
     scope: str = "session"
     source_turn: int = 0
     pinned: bool = False
@@ -268,7 +268,6 @@ def extract_facts_from_messages(
         return []
 
     last_user_idx = user_indices[-1]
-    # Only inspect turns strictly BEFORE the final user message, and never extract from system prompt
     earlier_turns = [
         (i, m) for i, m in enumerate(messages[:last_user_idx]) if m.get("role") != "system"
     ]
@@ -284,7 +283,6 @@ def extract_facts_from_messages(
         if not text:
             continue
 
-        # Extract constraints from user turns only
         if role == "user" and len(constraints) < max_constraints:
             extracted_c = _extract_constraints(text, turn_idx)
             for c in extracted_c:
@@ -294,7 +292,6 @@ def extract_facts_from_messages(
                     if len(constraints) >= max_constraints:
                         break
 
-        # Extract code facts from all roles (fenced blocks first, then un-fenced definitions)
         if len(code_facts) < max_code_facts:
             fenced_blocks = FENCED_CODE_RE.findall(text)
             for block in fenced_blocks:

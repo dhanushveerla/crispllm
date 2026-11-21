@@ -300,13 +300,14 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         app.state.edgemem_redactor = redactor
         app.state.edgemem_counters = counters
 
-        session_mgr = mcp_server.session_manager
-        async with session_mgr.run():
-            yield
-
-        await client.aclose()
-        memory_store.close()
-        telemetry_store.close()
+        try:
+            session_mgr = mcp_server.session_manager
+            async with session_mgr.run():
+                yield
+        finally:
+            await client.aclose()
+            memory_store.close()
+            telemetry_store.close()
 
     app = FastAPI(title="EdgeMem Proxy", version="1.0.0", lifespan=lifespan)
     app.add_middleware(EdgeMemAuthMiddleware, config=cfg.security)

@@ -327,7 +327,7 @@ port = 8080
 [memory]
 enabled = true
 db_path = "{db_file}"
-""")
+""", encoding="utf-8")
 
     with TelemetryStore(db_file) as store:
         store.record(

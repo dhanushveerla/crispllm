@@ -128,6 +128,7 @@ class OutlineCache:
         size: int,
         lines_key: str,
     ) -> tuple[str, int] | None:
+        rel_path = Path(rel_path).as_posix().replace("\\", "/")
         key = (rel_path, mtime_ns, size, lines_key)
         if key in self._lru:
             self._lru.move_to_end(key)
@@ -170,6 +171,7 @@ class OutlineCache:
         rendered: str,
         token_count: int,
     ) -> None:
+        rel_path = Path(rel_path).as_posix().replace("\\", "/")
         key = (rel_path, mtime_ns, size, lines_key)
         if self._conn is not None:
             try:
@@ -206,6 +208,7 @@ class OutlineCache:
             self._lru[key] = (rendered, int(token_count))
 
     def invalidate(self, rel_path: str) -> None:
+        rel_path = Path(rel_path).as_posix().replace("\\", "/")
         if self._conn is not None:
             try:
                 self._conn.execute(
@@ -233,6 +236,20 @@ class OutlineCache:
 
     def __len__(self) -> int:
         return len(self._lru)
+
+    def close(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+
+    def __enter__(self) -> OutlineCache:
+        return self
+
+    def __exit__(self, *_) -> None:
+        self.close()
 
 
 class TagCache:
@@ -291,7 +308,6 @@ class TagCache:
             return None
         cached_mtime, tags_json, token_count = row
         if abs(cached_mtime - mtime) > 1e-6:
-            # File modified — cache miss
             return None
         try:
             tags = _json_to_tags(tags_json)
@@ -358,7 +374,8 @@ class TagCache:
             except Exception:
                 pass
             self._conn = None
-            self.outline_cache._conn = None
+        if hasattr(self, "outline_cache") and self.outline_cache is not None:
+            self.outline_cache.close()
 
     def __enter__(self) -> "TagCache":
         return self
