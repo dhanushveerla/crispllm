@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import json
+import sys
+import types
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -359,13 +361,17 @@ def test_sysinfo_get_process_rss_mb():
 
     mock_rusage = MagicMock()
     mock_rusage.ru_maxrss = 104857600
+    mock_resource = types.SimpleNamespace(RUSAGE_SELF=0, getrusage=lambda _: mock_rusage)
     with patch("sys.platform", "darwin"):
-        with patch("resource.getrusage", return_value=mock_rusage):
+        with patch.dict(sys.modules, {"resource": mock_resource}):
             rss_darwin = get_process_rss_mb()
             assert pytest.approx(rss_darwin, 0.01) == 100.0
 
+    mock_failing_resource = types.SimpleNamespace(
+        RUSAGE_SELF=0, getrusage=MagicMock(side_effect=Exception("no resource"))
+    )
     with patch("sys.platform", "linux"):
         with patch("builtins.open", side_effect=OSError("permission denied")):
-            with patch("resource.getrusage", side_effect=Exception("no resource")):
+            with patch.dict(sys.modules, {"resource": mock_failing_resource}):
                 rss_fallback = get_process_rss_mb()
                 assert rss_fallback == 0.0

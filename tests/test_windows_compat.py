@@ -3,9 +3,10 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import sys
-from unittest.mock import MagicMock
+import tomllib
+from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
@@ -192,3 +193,37 @@ def test_cli_output_pure_ascii_and_init_newline(tmp_path: Path):
     res_stats = runner.invoke(cli, ["stats", "--config", str(cfg_file)])
     assert res_stats.exit_code == 0
     res_stats.output.encode("ascii")
+
+
+def test_toml_windows_path_escaping(tmp_path: Path):
+    windows_path_str = r"C:\Users\runneradmin\AppData\Local\Temp\test.db"
+    posix_path_str = PureWindowsPath(windows_path_str).as_posix()
+    valid_toml = f'db_path = "{posix_path_str}"\n'
+    parsed = tomllib.loads(valid_toml)
+    assert parsed["db_path"] == "C:/Users/runneradmin/AppData/Local/Temp/test.db"
+
+    local_posix_toml = f'db_path = "{(tmp_path / "test.db").as_posix()}"\n'
+    parsed_local = tomllib.loads(local_posix_toml)
+    assert "test.db" in parsed_local["db_path"]
+
+    invalid_toml = f'db_path = "{windows_path_str}"\n'
+    with pytest.raises(tomllib.TOMLDecodeError):
+        tomllib.loads(invalid_toml)
+
+
+def test_cli_init_windows_environment_hints(tmp_path: Path):
+    runner = CliRunner()
+    target_win = tmp_path / "win_cfg.toml"
+    with patch("sys.platform", "win32"):
+        res_win = runner.invoke(cli, ["init", "--output", str(target_win), "--preset", "nvidia"])
+        assert res_win.exit_code == 0
+        assert '$env:NVIDIA_API_KEY="<your-key>"' in res_win.output
+        assert "export NVIDIA_API_KEY" not in res_win.output
+
+    target_linux = tmp_path / "linux_cfg.toml"
+    with patch("sys.platform", "linux"):
+        res_linux = runner.invoke(cli, ["init", "--output", str(target_linux), "--preset", "nvidia"])
+        assert res_linux.exit_code == 0
+        assert 'export NVIDIA_API_KEY="<your-key>"' in res_linux.output
+        assert "$env:" not in res_linux.output
+

@@ -175,6 +175,8 @@ def _run_test_in_tmpdir(
                 text=True,
                 timeout=timeout,
                 cwd=str(tmp),
+                encoding="utf-8",
+                errors="replace",
             )
             passed = proc.returncode == 0 and "PASS" in proc.stdout
             output = (proc.stdout + proc.stderr).strip()
@@ -199,7 +201,7 @@ class TestReferenceSolutionsPass:
         )
         assert passed, (
             f"Task {task['id']!r} reference_solution FAILED its own test_code.\n"
-            f"Output:\n{output[:800]}"
+            f"Output:\n{output[-1200:]}"
         )
 
 
@@ -252,7 +254,7 @@ class TestPassAtOneCoverage:
                 solution_files=task["reference_solution"],
             )
             if not passed:
-                failures.append(f"  FAIL: {task['id']!r}\n    {output[:200]}")
+                failures.append(f"  FAIL: {task['id']!r}\n    {output[-1200:]}")
         assert not failures, (
             f"Reference solutions did not achieve 100% Pass@1:\n" + "\n".join(failures)
         )
@@ -308,7 +310,7 @@ class TestStressTasksSuite:
         )
         assert passed, (
             f"Stress task {task['id']!r} reference solution FAILED test_code.\n"
-            f"Output:\n{output[:1000]}"
+            f"Output:\n{output[-1200:]}"
         )
 
     @pytest.mark.parametrize("idx", range(6))

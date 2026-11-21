@@ -326,7 +326,7 @@ port = 8080
 
 [memory]
 enabled = true
-db_path = "{db_file}"
+db_path = "{db_file.as_posix()}"
 """, encoding="utf-8")
 
     with TelemetryStore(db_file) as store:

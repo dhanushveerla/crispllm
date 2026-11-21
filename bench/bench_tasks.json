@@ -67,9 +67,8 @@
   {
     "id": "ef_05",
     "category": "exact_fact",
-    "description": "Fix a cross-file type mismatch: a function returns the wrong type alias defined in types.py.",
+    "description": "Fix a cross-file type mismatch: a function returns the wrong type alias defined in types_.py.",
     "files": {
-      "types.py": "# Canonical type aliases \u2014 DO NOT MODIFY\nfrom typing import TypedDict, List\n\nclass Point(TypedDict):\n    x: float\n    y: float\n\nclass Polygon(TypedDict):\n    vertices: List[Point]\n    closed: bool\n",
       "geometry.py": "\"\"\"BUG: make_square returns a plain list instead of a Polygon TypedDict.\nFix it to return the exact Polygon structure from types.py.\"\"\"\nfrom types_ import Point, Polygon  # note: file is types.py but imported as types_\nfrom typing import List\n\ndef make_square(side: float) -> Polygon:\n    # BUG: returns wrong structure\n    return [{'x': 0.0, 'y': 0.0}, {'x': side, 'y': 0.0},\n            {'x': side, 'y': side}, {'x': 0.0, 'y': side}]  # type: ignore\n",
       "types_.py": "# Canonical type aliases \u2014 DO NOT MODIFY (this is types.py exposed as types_)\nfrom typing import TypedDict, List\n\nclass Point(TypedDict):\n    x: float\n    y: float\n\nclass Polygon(TypedDict):\n    vertices: List[Point]\n    closed: bool\n"
     },

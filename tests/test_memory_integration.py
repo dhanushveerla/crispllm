@@ -475,7 +475,7 @@ base_url = "http://127.0.0.1:11434/v1"
 
 [memory]
 enabled = true
-db_path = "{db_file}"
+db_path = "{db_file.as_posix()}"
 """,
         encoding="utf-8",
     )

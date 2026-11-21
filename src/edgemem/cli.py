@@ -84,12 +84,13 @@ def init(preset: str, output: Path, force: bool) -> None:
     click.echo(f"Created {output} (preset: {preset})")
     click.echo("Start EdgeMem with:")
     preset_lower = preset.lower()
+    env_set = "$env:" if sys.platform == "win32" else "export "
     if preset_lower == "nvidia":
-        click.echo('  export NVIDIA_API_KEY="<your-key>"')
+        click.echo(f'  {env_set}NVIDIA_API_KEY="<your-key>"')
     elif preset_lower == "gemini":
-        click.echo('  export GEMINI_API_KEY="<your-key>"')
+        click.echo(f'  {env_set}GEMINI_API_KEY="<your-key>"')
     elif preset_lower == "hybrid":
-        click.echo('  export NVIDIA_API_KEY="<your-key>"  (optional for cloud fallback)')
+        click.echo(f'  {env_set}NVIDIA_API_KEY="<your-key>"  (optional for cloud fallback)')
     click.echo("  edgemem serve")
 
 
