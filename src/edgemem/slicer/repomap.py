@@ -30,7 +30,7 @@ from typing import Any, Sequence
 import tiktoken
 from grep_ast import TreeContext
 
-from edgemem.slicer.cache import OutlineCache, TagCache
+from edgemem.slicer.cache import OutlineCache, SymbolCache, TagCache
 from edgemem.slicer.pagerank import (
     build_symbol_graph,
     compute_pagerank,
@@ -38,7 +38,13 @@ from edgemem.slicer.pagerank import (
     is_test_file,
     personalise_ranks,
 )
-from edgemem.slicer.symbols import SymbolDef, SymbolSliceResult, extract_symbols
+from edgemem.slicer.symbols import (
+    GENERIC_CALL_NAMES,
+    SymbolDef,
+    SymbolSliceResult,
+    extract_symbols,
+    extract_symbols_and_imports,
+)
 from edgemem.slicer.tags import Tag, extract_tags, scan_repo_files
 
 logger = logging.getLogger("edgemem.slicer.repomap")
@@ -185,9 +191,10 @@ class RepoMap:
         self.model_name = model_name
         self._cache = cache or TagCache(max_outline_entries=max_outline_entries)
         self.outline_cache = outline_cache or self._cache.outline_cache
+        sc = getattr(self._cache, "symbol_cache", None)
+        self.symbol_cache: SymbolCache = sc if sc is not None else SymbolCache(conn=getattr(self._cache, "_conn", None))
         self._enc: tiktoken.Encoding | None = None
         self._cached_raw_tokens: int | None = None
-        self._symbol_cache: dict[str, tuple[int, int, list[SymbolDef]]] = {}
 
 
     def get_repo_map(
@@ -420,14 +427,19 @@ class RepoMap:
 
         return "".join(chunks)
 
-    def _truncate_to_budget(self, text: str, budget: int) -> str:
-        """Truncate text to exactly `budget` tokens using binary search."""
+    def _count_slice_tokens(self, text: str) -> int:
+        if self._enc is not None:
+            return len(self._enc.encode(text, disallowed_special=()))
+        return max(1, int(len(text) / 3.4))
+
+    def _truncate_to_budget(self, text: str, budget: int, count_fn: Any = None) -> str:
+        fn = count_fn if count_fn is not None else self._count
         lines = text.splitlines(keepends=True)
         lo, hi = 0, len(lines)
         while lo < hi:
             mid = (lo + hi + 1) // 2
             candidate = "".join(lines[:mid])
-            if self._count(candidate) <= budget:
+            if fn(candidate) <= budget:
                 lo = mid
             else:
                 hi = mid - 1
@@ -477,16 +489,21 @@ class RepoMap:
             except OSError:
                 continue
 
-            cached = self._symbol_cache.get(rel)
-            if cached is not None and cached[0] == mtime_ns and cached[1] == size_b:
-                all_symbols.extend(cached[2])
+            cached = self.symbol_cache.get(rel, mtime_ns, size_b)
+            if cached is not None:
+                _, _, sym_dicts = cached
+                for d in sym_dicts:
+                    all_symbols.append(SymbolDef.from_dict(d, body=""))
             else:
                 try:
                     content = fpath.read_text(encoding="utf-8", errors="replace")
+                    tok_cnt = self._count(content)
                 except OSError:
                     content = ""
-                file_symbols = extract_symbols(fpath, rel, content=content)
-                self._symbol_cache[rel] = (mtime_ns, size_b, file_symbols)
+                    tok_cnt = 0
+                imports, file_symbols = extract_symbols_and_imports(fpath, rel, content=content)
+                sym_dicts = [s.to_dict() for s in file_symbols]
+                self.symbol_cache.put(rel, mtime_ns, size_b, tok_cnt, imports, sym_dicts)
                 all_symbols.extend(file_symbols)
         return all_symbols
 
@@ -497,7 +514,56 @@ class RepoMap:
         include_callers: bool = True,
         include_callees: bool = True,
     ) -> SymbolSliceResult:
-        all_symbols = self.scan_symbols()
+        all_files = scan_repo_files(self.repo_path)
+        raw_tokens = 0
+        all_symbols: list[SymbolDef] = []
+        file_imports_map: dict[str, list[str]] = {}
+        symbol_def_files: dict[str, set[str]] = {}
+        cached_batch = self.symbol_cache.get_all()
+
+        for fpath in all_files:
+            try:
+                rel = fpath.relative_to(self.repo_path).as_posix()
+            except ValueError:
+                rel = fpath.as_posix()
+            try:
+                st = fpath.stat()
+                mtime_ns = st.st_mtime_ns
+                size_b = st.st_size
+            except OSError:
+                continue
+
+            key = (rel, mtime_ns, size_b)
+            cached = cached_batch.get(key)
+            if cached is None:
+                cached = self.symbol_cache.get(rel, mtime_ns, size_b)
+
+            if cached is not None:
+                tok_cnt, file_imports, sym_dicts = cached
+                raw_tokens += tok_cnt
+                file_imports_map[rel] = file_imports
+                for d in sym_dicts:
+                    s_def = SymbolDef.from_dict(d, body="")
+                    all_symbols.append(s_def)
+                    symbol_def_files.setdefault(s_def.name, set()).add(rel)
+            else:
+                try:
+                    content = fpath.read_text(encoding="utf-8", errors="replace")
+                    tok_cnt = self._count_slice_tokens(content)
+                except OSError:
+                    content = ""
+                    tok_cnt = 0
+                raw_tokens += tok_cnt
+                file_imports, file_symbols = extract_symbols_and_imports(fpath, rel, content=content)
+                file_imports_map[rel] = file_imports
+                sym_dicts = [s.to_dict() for s in file_symbols]
+                self.symbol_cache.put(rel, mtime_ns, size_b, tok_cnt, file_imports, sym_dicts)
+                for s_def in file_symbols:
+                    all_symbols.append(s_def)
+                    symbol_def_files.setdefault(s_def.name, set()).add(rel)
+
+        if self._cached_raw_tokens is None:
+            self._cached_raw_tokens = raw_tokens
 
         target: SymbolDef | None = None
         for s in all_symbols:
@@ -518,8 +584,6 @@ class RepoMap:
                     target = s
                     break
 
-        raw_toks = self.raw_token_count()
-
         if target is None:
             fallback_content = self.get_repo_map(query=symbol, max_tokens=token_budget)
             return SymbolSliceResult(
@@ -528,47 +592,124 @@ class RepoMap:
                 target_file=None,
                 callee_count=0,
                 caller_count=0,
-                sliced_tokens=self._count(fallback_content),
-                raw_tokens=raw_toks,
+                sliced_tokens=self._count_slice_tokens(fallback_content),
+                raw_tokens=raw_tokens,
                 content=fallback_content,
                 fallback_used=True,
             )
 
-        callees: list[SymbolDef] = []
-        seen_callee_keys: set[str] = set()
-        for s in all_symbols:
-            if s.qualified_name == target.qualified_name and s.file_path == target.file_path:
-                continue
-            if s.name in target.references or s.qualified_name in target.references:
-                k = f"{s.file_path}:{s.qualified_name}"
-                if k not in seen_callee_keys:
-                    seen_callee_keys.add(k)
-                    callees.append(s)
+        target_abs = self.repo_path / target.file_path
+        try:
+            target_content = target_abs.read_text(encoding="utf-8", errors="replace")
+            lines = target_content.splitlines()
+            body_lines = lines[target.start_line - 1 : target.end_line]
+            target_body = "\n".join(body_lines).strip()
+        except Exception:
+            target_body = ""
 
-        callers: list[SymbolDef] = []
-        seen_caller_keys: set[str] = set()
-        for s in all_symbols:
-            if s.qualified_name == target.qualified_name and s.file_path == target.file_path:
-                continue
-            if target.name in s.references or target.qualified_name in s.references:
-                k = f"{s.file_path}:{s.qualified_name}"
-                if k not in seen_caller_keys:
-                    seen_caller_keys.add(k)
-                    callers.append(s)
+        callees: list[SymbolDef] = []
+        if include_callees:
+            imported_set = set(file_imports_map.get(target.file_path, []))
+            bucket1: list[SymbolDef] = []
+            bucket2: list[SymbolDef] = []
+            bucket3: list[SymbolDef] = []
+
+            seen_callee_keys: set[tuple[str, str]] = set()
+            seen_callee_sigs: set[tuple[str, str]] = set()
+
+            for s in all_symbols:
+                if s.file_path == target.file_path and s.qualified_name == target.qualified_name:
+                    continue
+                if s.name not in target.references and s.qualified_name not in target.references:
+                    continue
+                if (s.file_path, s.qualified_name) in seen_callee_keys:
+                    continue
+                if (s.file_path, s.signature) in seen_callee_sigs:
+                    continue
+
+                is_generic = s.name in GENERIC_CALL_NAMES and s.name != symbol
+
+                if s.file_path == target.file_path:
+                    if not is_generic:
+                        seen_callee_keys.add((s.file_path, s.qualified_name))
+                        seen_callee_sigs.add((s.file_path, s.signature))
+                        bucket1.append(s)
+                else:
+                    if is_generic:
+                        continue
+                    file_stem = Path(s.file_path).stem
+                    is_imported = (
+                        s.name in imported_set
+                        or s.qualified_name in imported_set
+                        or file_stem in imported_set
+                        or any(part in imported_set for part in Path(s.file_path).parts)
+                    )
+                    if is_imported:
+                        seen_callee_keys.add((s.file_path, s.qualified_name))
+                        seen_callee_sigs.add((s.file_path, s.signature))
+                        bucket2.append(s)
+                    elif len(symbol_def_files.get(s.name, set())) == 1:
+                        seen_callee_keys.add((s.file_path, s.qualified_name))
+                        seen_callee_sigs.add((s.file_path, s.signature))
+                        bucket3.append(s)
+
+            bucket1.sort(
+                key=lambda s: 0 if (target.enclosing_class and s.enclosing_class == target.enclosing_class) else 1
+            )
+            callees = bucket1 + bucket2 + bucket3
+
+        callers: list[tuple[SymbolDef, str]] = []
+        if include_callers:
+            candidate_callers: list[SymbolDef] = []
+            seen_caller_keys: set[tuple[str, str]] = set()
+
+            for s in all_symbols:
+                if s.file_path == target.file_path and s.qualified_name == target.qualified_name:
+                    continue
+                if s.file_path == target.file_path and (s.name == target.enclosing_class or s.kind == "class"):
+                    continue
+                if target.name not in s.references and target.qualified_name not in s.references:
+                    continue
+                k = (s.file_path, s.qualified_name)
+                if k in seen_caller_keys:
+                    continue
+                seen_caller_keys.add(k)
+                candidate_callers.append(s)
+
+            file_lines_cache: dict[str, list[str]] = {}
+            for s in candidate_callers:
+                if s.file_path not in file_lines_cache:
+                    try:
+                        cf_text = (self.repo_path / s.file_path).read_text(encoding="utf-8", errors="replace")
+                        file_lines_cache[s.file_path] = cf_text.splitlines()
+                    except OSError:
+                        file_lines_cache[s.file_path] = []
+                lines = file_lines_cache[s.file_path]
+                snippet = ""
+                start_idx = max(0, s.start_line - 1)
+                end_idx = min(len(lines), s.end_line)
+                for idx in range(start_idx, end_idx):
+                    line_str = lines[idx]
+                    if target.name in line_str:
+                        clean_snippet = re.sub(r"\s+", " ", line_str).strip()
+                        if len(clean_snippet) > 120:
+                            clean_snippet = clean_snippet[:117] + "..."
+                        snippet = clean_snippet
+                        break
+                callers.append((s, snippet))
 
         target_budget = max(50, int(token_budget * 0.55))
         callee_budget = int(token_budget * 0.25)
         caller_budget = max(0, token_budget - target_budget - callee_budget)
 
         target_header = f"# Symbol: {target.qualified_name} ({target.file_path}:{target.start_line}-{target.end_line})"
-        target_body = target.body.strip()
         full_target_block = f"{target_header}\n{target_body}"
-        if self._count(full_target_block) > target_budget:
-            avail_body = max(20, target_budget - self._count(target_header) - 2)
-            target_body = self._truncate_to_budget(target_body, avail_body)
+        if self._count_slice_tokens(full_target_block) > target_budget:
+            avail_body = max(20, target_budget - self._count_slice_tokens(target_header) - 2)
+            target_body = self._truncate_to_budget(target_body, avail_body, count_fn=self._count_slice_tokens)
             full_target_block = f"{target_header}\n{target_body}"
 
-        used_target_toks = self._count(full_target_block)
+        used_target_toks = self._count_slice_tokens(full_target_block)
         effective_callee_budget = callee_budget + max(0, target_budget - used_target_toks)
 
         callee_block = ""
@@ -577,22 +718,25 @@ class RepoMap:
             for c in callees:
                 entry = f"{c.file_path}:\n  {c.signature}"
                 test_str = "\n".join(lines + [entry])
-                if self._count(test_str) > effective_callee_budget:
+                if self._count_slice_tokens(test_str) > effective_callee_budget:
                     break
                 lines.append(entry)
             if len(lines) > 1:
                 callee_block = "\n".join(lines)
 
-        used_callee_toks = self._count(callee_block) if callee_block else 0
+        used_callee_toks = self._count_slice_tokens(callee_block) if callee_block else 0
         effective_caller_budget = caller_budget + max(0, effective_callee_budget - used_callee_toks)
 
         caller_block = ""
         if include_callers and callers:
             lines = [f"# 1-Hop Callers ({len(callers)}):"]
-            for c in callers:
-                entry = f"{c.file_path}:\n  {c.signature}"
+            for c, snippet in callers:
+                if snippet:
+                    entry = f"{c.file_path}:\n  {c.signature}\n    {snippet}"
+                else:
+                    entry = f"{c.file_path}:\n  {c.signature}"
                 test_str = "\n".join(lines + [entry])
-                if self._count(test_str) > effective_caller_budget:
+                if self._count_slice_tokens(test_str) > effective_caller_budget:
                     break
                 lines.append(entry)
             if len(lines) > 1:
@@ -605,7 +749,7 @@ class RepoMap:
             sections.append(caller_block)
 
         final_content = "\n\n".join(sections).strip()
-        sliced_tokens = self._count(final_content)
+        sliced_tokens = self._count_slice_tokens(final_content)
 
         return SymbolSliceResult(
             symbol=symbol,
@@ -614,7 +758,7 @@ class RepoMap:
             callee_count=len(callees),
             caller_count=len(callers),
             sliced_tokens=sliced_tokens,
-            raw_tokens=raw_toks,
+            raw_tokens=raw_tokens,
             content=final_content,
             fallback_used=False,
         )
@@ -624,6 +768,8 @@ class RepoMap:
             self._cache.close()
         if hasattr(self, "outline_cache") and self.outline_cache is not None:
             self.outline_cache.close()
+        if hasattr(self, "symbol_cache") and self.symbol_cache is not None:
+            self.symbol_cache.close()
 
     def __enter__(self) -> RepoMap:
         return self

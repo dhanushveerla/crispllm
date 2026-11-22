@@ -22,6 +22,7 @@ from edgemem.proxy.mcp_server import create_mcp_server
 from edgemem.proxy.middleware import MemoryMiddleware
 from edgemem.proxy.router import HybridRouter, RouteTarget
 from edgemem.proxy.watchdog import RamPressureWatchdog, WatchdogSnapshot
+from edgemem.slicer.cache import TagCache
 from edgemem.slicer.repomap import RepoMap
 from edgemem.slicer.symbols import SymbolDef, SymbolSliceResult, extract_symbols
 
@@ -432,3 +433,152 @@ def test_llama_cache_prompt_injection(tmp_path: Path):
         assert len(mock_transport.recorded_bodies) == 1
         body_sent = mock_transport.recorded_bodies[0]
         assert body_sent.get("cache_prompt") is True
+
+
+def test_generic_callee_filter(tmp_path: Path):
+    repo = tmp_path / "generic_repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    cache_py = repo / "cache.py"
+    cache_py.write_text(
+        "class Cache:\n"
+        "    def get(self, key: str) -> str:\n"
+        "        return key\n"
+        "    def close(self) -> None:\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+    worker_py = repo / "worker.py"
+    worker_py.write_text(
+        "def run_worker(data: dict) -> str:\n"
+        "    val = data.get('foo')\n"
+        "    return str(val)\n",
+        encoding="utf-8",
+    )
+    with RepoMap(repo_path=repo, max_tokens=1024) as rm:
+        res = rm.slice_symbol("run_worker", token_budget=800)
+        assert res.found is True
+        assert "Cache.get" not in res.content
+        assert "cache.py" not in res.content
+        assert res.callee_count == 0
+
+        res_get = rm.slice_symbol("get", token_budget=800)
+        assert res_get.found is True
+        assert res_get.target_file == "cache.py"
+
+
+def test_import_aware_priority(tmp_path: Path):
+    repo = tmp_path / "priority_repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    imported_mod = repo / "imported_mod.py"
+    imported_mod.write_text(
+        "def imported_func() -> str:\n"
+        "    return 'imported'\n",
+        encoding="utf-8",
+    )
+    unimported_mod = repo / "unimported_mod.py"
+    unimported_mod.write_text(
+        "def unimported_func() -> str:\n"
+        "    return 'unimported'\n",
+        encoding="utf-8",
+    )
+    main_py = repo / "main.py"
+    main_py.write_text(
+        "from imported_mod import imported_func\n\n"
+        "def local_helper() -> str:\n"
+        "    return 'local'\n\n"
+        "def execute_task() -> str:\n"
+        "    a = local_helper()\n"
+        "    b = imported_func()\n"
+        "    c = unimported_func()\n"
+        "    return a + b + c\n",
+        encoding="utf-8",
+    )
+    with RepoMap(repo_path=repo, max_tokens=1024) as rm:
+        res = rm.slice_symbol("execute_task", token_budget=800)
+        assert res.found is True
+        callee_section = res.content.split("# 1-Hop Callees")[-1]
+        local_idx = callee_section.find("local_helper")
+        imported_idx = callee_section.find("imported_func")
+        unimported_idx = callee_section.find("unimported_func")
+        assert local_idx != -1
+        assert imported_idx != -1
+        assert local_idx < imported_idx
+        if unimported_idx != -1:
+            assert imported_idx < unimported_idx
+
+
+def test_deduplication_and_multi_line_signature(tmp_path: Path):
+    repo = tmp_path / "sig_repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    lib_py = repo / "lib.py"
+    lib_py.write_text(
+        "def multi_line_target(\n"
+        "    first_arg: int,\n"
+        "    second_arg: str = 'default',\n"
+        ") -> bool:\n"
+        "    return True\n",
+        encoding="utf-8",
+    )
+    caller_py = repo / "caller.py"
+    caller_py.write_text(
+        "from lib import multi_line_target\n\n"
+        "def run1() -> None:\n"
+        "    multi_line_target(1, 'a')\n"
+        "    multi_line_target(2, 'b')\n",
+        encoding="utf-8",
+    )
+    with RepoMap(repo_path=repo, max_tokens=1024) as rm:
+        res = rm.slice_symbol("run1", token_budget=800)
+        assert res.found is True
+        assert "def multi_line_target(first_arg: int, second_arg: str = 'default') -> bool" in res.content
+        assert res.callee_count == 1
+        callee_section = res.content.split("# 1-Hop Callees")[-1]
+        assert callee_section.count("multi_line_target") == 1
+
+
+def test_caller_hygiene(tmp_path: Path):
+    repo = tmp_path / "hygiene_repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    service_py = repo / "service.py"
+    service_py.write_text(
+        "class OrderService:\n"
+        "    def process_order(self, order_id: str) -> bool:\n"
+        "        return len(order_id) > 0\n",
+        encoding="utf-8",
+    )
+    routes_py = repo / "routes.py"
+    routes_py.write_text(
+        "from service import OrderService\n\n"
+        "def dummy_decorator(fn):\n"
+        "    return fn\n\n"
+        "@dummy_decorator\n"
+        "def submit_order_route(order_id: str) -> bool:\n"
+        "    svc = OrderService()\n"
+        "    return svc.process_order(order_id)\n",
+        encoding="utf-8",
+    )
+    with RepoMap(repo_path=repo, max_tokens=1024) as rm:
+        res = rm.slice_symbol("OrderService.process_order", token_budget=800)
+        assert res.found is True
+        assert "OrderService:" not in res.content.split("# 1-Hop Callers")[-1]
+        assert "@dummy_decorator" not in res.content
+        assert "submit_order_route" in res.content
+        assert "svc.process_order(order_id)" in res.content
+
+
+def test_warm_cache_reuse(tmp_path: Path):
+    repo = _make_test_repo(tmp_path)
+    tag_cache = TagCache(db_path=tmp_path / "warm_test.db")
+    with RepoMap(repo_path=repo, max_tokens=1024, cache=tag_cache) as rm:
+        res1 = rm.slice_symbol("create_token", token_budget=800)
+        assert res1.found is True
+
+        with patch("edgemem.slicer.symbols._get_parser") as mock_get_parser:
+            t0 = time.perf_counter()
+            res2 = rm.slice_symbol("create_token", token_budget=800)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+
+            assert mock_get_parser.call_count == 0
+            assert res2.found is True
+            assert res2.target_file == "auth.py"
+            assert elapsed_ms < 200.0

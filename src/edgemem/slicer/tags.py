@@ -403,15 +403,17 @@ def scan_repo_files(
             d for d in dirs
             if d not in ignore_dirs
             and not d.startswith(".")
+            and not d.endswith(".egg-info")
             and not _is_gitignored(root_path / d, repo_root, gi_patterns)
         ]
         for fname in filenames:
             fpath = root_path / fname
-            if fpath.suffix.lower() in _IGNORE_EXTS:
+            ext = fpath.suffix.lower()
+            if ext in _IGNORE_EXTS:
                 continue
             if _is_gitignored(fpath, repo_root, gi_patterns):
                 continue
-            if _is_binary(fpath):
+            if ext not in _EXT_TO_LANG and _is_binary(fpath):
                 continue
             files.append(fpath)
 
