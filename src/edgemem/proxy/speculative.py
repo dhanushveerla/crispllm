@@ -293,9 +293,10 @@ class LlamaSpeculativePreset:
     downgrade_reason: str | None
     args: list[str]
     estimated_extra_ram_mb: int
+    platform_name: str | None = None
 
     def render_shell_command(self, platform_name: str | None = None) -> str:
-        plat = platform_name if platform_name is not None else sys.platform
+        plat = platform_name or self.platform_name or sys.platform
         if plat == "win32":
             return _render_powershell(self.args)
         return shlex.join(self.args)
@@ -306,7 +307,7 @@ def build_llama_server_command(
     draft_model_path: str | None = None,
     mode: str = "ngram-simple",
     profile: str = "auto",
-    binary: str = "llama-server",
+    binary: str | None = None,
     device: str | None = None,
     ctx_size: int | None = None,
     host: str = "127.0.0.1",
@@ -315,8 +316,16 @@ def build_llama_server_command(
     watchdog: RamPressureWatchdog | None = None,
     available_mb: float | None = None,
     pressure: str | None = None,
+    platform_name: str | None = None,
+    max_ctx_cap: int | None = None,
 ) -> LlamaSpeculativePreset:
     cfg = config or SpeculativeConfig()
+
+    target_platform = platform_name if platform_name is not None else sys.platform
+    if binary is not None:
+        resolved_binary = binary
+    else:
+        resolved_binary = "llama-server.exe" if target_platform == "win32" else "llama-server"
 
     avail = available_mb
     press = pressure
@@ -357,10 +366,22 @@ def build_llama_server_command(
     elif req_mode not in ("ngram-simple", "ngram-mod", "none"):
         effective_mode = "ngram-simple"
 
+    if ctx_size is not None:
+        effective_ctx = ctx_size
+    else:
+        if resolved_profile == "t1-cpu":
+            default_cap = 2048
+        elif resolved_profile in ("t2-vulkan", "t2-gpu"):
+            default_cap = 4096
+        else:
+            default_cap = 4096
+        if max_ctx_cap is not None and max_ctx_cap < default_cap:
+            effective_ctx = max_ctx_cap
+        else:
+            effective_ctx = default_cap
+
     profile_args: list[str] = []
-    effective_ctx = ctx_size or 4096
     if resolved_profile == "t1-cpu":
-        effective_ctx = ctx_size or 2048
         profile_args.extend(["--n-gpu-layers", "0", "--threads", "2", "--threads-batch", "2", "-c", str(effective_ctx)])
     elif resolved_profile == "t2-vulkan":
         vulkan_dev = device or "Vulkan1"
@@ -381,14 +402,14 @@ def build_llama_server_command(
     else:
         profile_args.extend(["--n-gpu-layers", "99", "-c", str(effective_ctx), "-fa", "on"])
 
-    args: list[str] = [binary, "-m", model_path, "-np", "1", "--host", host, "--port", str(port)]
+    args: list[str] = [resolved_binary, "-m", model_path, "-np", "1", "--host", host, "--port", str(port)]
     args.extend(profile_args)
 
     actual_draft_path = draft_model_path or cfg.draft_model_path
     extra_ram = 0
 
     if effective_mode == "ngram-simple":
-        extra_ram = 16
+        extra_ram = 0
         args.extend([
             "--spec-type",
             "ngram-simple",
@@ -400,7 +421,7 @@ def build_llama_server_command(
             str(cfg.ngram_simple_min_hits),
         ])
     elif effective_mode == "ngram-mod":
-        extra_ram = 24
+        extra_ram = 16
         args.extend([
             "--spec-type",
             "ngram-mod",

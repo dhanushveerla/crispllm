@@ -471,17 +471,17 @@ def memory_clear(session: str | None, config_path: Path | None) -> None:
 @click.option("--draft-model", default=None, help="Draft GGUF model path.")
 @click.option("--mode", default=None, help="Speculative preset mode (ngram-simple, ngram-mod, draft, hybrid, none).")
 @click.option("--profile", default="auto", help="Hardware profile (auto, t1-cpu, t2-gpu, t2-arc, t3-rtx).")
-@click.option("--binary", default="llama-server", help="Path to llama-server binary.")
+@click.option("--binary", default=None, help="Path to llama-server binary.")
 @click.option("--device", default=None, help="Target device (cpu, vulkan, cuda, mps).")
-@click.option("--ctx-size", default=None, type=int, help="Main model context window (default: 8192).")
-@click.option("--port", default=8080, type=int, help="Listen port (default: 8080).")
+@click.option("--ctx-size", default=None, type=int, help="Main model context window (default: profile cap).")
+@click.option("--port", default=8081, type=int, help="Listen port (default: 8081).")
 @click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path), help="Path to edgemem.toml configuration file.")
 def llama_cmd(
     model: str | None,
     draft_model: str | None,
     mode: str | None,
     profile: str,
-    binary: str,
+    binary: str | None,
     device: str | None,
     ctx_size: int | None,
     port: int,
@@ -495,7 +495,6 @@ def llama_cmd(
     model_path = model or cfg.model
     spec_mode = mode or cfg.speculative.local_mode
     draft_path = draft_model or cfg.speculative.draft_model_path
-    c_size = ctx_size or cfg.resources.max_local_ctx
     watchdog = RamPressureWatchdog(cfg.resources)
 
     preset = build_llama_server_command(
@@ -505,10 +504,11 @@ def llama_cmd(
         profile=profile,
         binary=binary,
         device=device,
-        ctx_size=c_size,
+        ctx_size=ctx_size,
         port=port,
         config=cfg.speculative,
         watchdog=watchdog,
+        max_ctx_cap=cfg.resources.max_local_ctx,
     )
 
     cmd_str = preset.render_shell_command()

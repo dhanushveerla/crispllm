@@ -414,7 +414,7 @@ def test_llama_server_speculative_presets():
         config=cfg,
     )
     assert p_ngram_simple.effective_mode == "ngram-simple"
-    assert p_ngram_simple.estimated_extra_ram_mb == 16
+    assert p_ngram_simple.estimated_extra_ram_mb == 0
     assert "--spec-type" in p_ngram_simple.args
     idx = p_ngram_simple.args.index("--spec-type")
     assert p_ngram_simple.args[idx + 1] == "ngram-simple"
@@ -433,7 +433,7 @@ def test_llama_server_speculative_presets():
         config=cfg,
     )
     assert p_ngram_mod.effective_mode == "ngram-mod"
-    assert p_ngram_mod.estimated_extra_ram_mb == 24
+    assert p_ngram_mod.estimated_extra_ram_mb == 16
     assert "--spec-ngram-mod-n-match" in p_ngram_mod.args
     assert "--spec-ngram-mod-n-min" in p_ngram_mod.args
     assert "--spec-ngram-mod-n-max" in p_ngram_mod.args
@@ -478,7 +478,7 @@ def test_llama_server_ram_pressure_downgrade():
     )
     assert p_missing.effective_mode == "ngram-simple"
     assert p_missing.downgrade_reason == "missing_draft_model"
-    assert p_missing.estimated_extra_ram_mb == 16
+    assert p_missing.estimated_extra_ram_mb == 0
 
     p_cpu = build_llama_server_command(
         model_path="/models/main.gguf",
@@ -515,14 +515,14 @@ def test_cli_llama_cmd_and_status(tmp_path: Path):
             "ngram-simple",
             "--profile",
             "t2-gpu",
-            "--port",
-            "8081",
         ],
     )
     assert res.exit_code == 0
     assert "Profile:   t2-gpu" in res.output
     assert "Mode:      ngram-simple" in res.output
-    assert "Extra RAM: 16 MB" in res.output
+    assert "Extra RAM: 0 MB" in res.output
+    assert "--port 8081" in res.output
+    assert "-c 4096" in res.output
     assert "--spec-type ngram-simple" in res.output
 
     res_downgrade = runner.invoke(
@@ -568,3 +568,62 @@ def test_cli_llama_cmd_and_status(tmp_path: Path):
         status_res = runner.invoke(cli, ["status"])
         assert status_res.exit_code == 0
         assert "Speculative: cloud_injected=10, retries=1, accepted=120/150 (80.0%)" in status_res.output
+
+
+def test_llama_server_defaults_regression():
+    p_default = build_llama_server_command(model_path="/models/main.gguf")
+    assert "--port" in p_default.args
+    assert p_default.args[p_default.args.index("--port") + 1] == "8081"
+
+    p_t1 = build_llama_server_command(model_path="/models/main.gguf", profile="t1-cpu")
+    assert p_t1.args[p_t1.args.index("-c") + 1] == "2048"
+
+    p_vul = build_llama_server_command(model_path="/models/main.gguf", profile="t2-vulkan")
+    assert p_vul.args[p_vul.args.index("-c") + 1] == "4096"
+
+    p_gpu = build_llama_server_command(model_path="/models/main.gguf", profile="t2-gpu")
+    assert p_gpu.args[p_gpu.args.index("-c") + 1] == "4096"
+
+    p_explicit_ctx = build_llama_server_command(model_path="/models/main.gguf", profile="t1-cpu", ctx_size=8192)
+    assert p_explicit_ctx.args[p_explicit_ctx.args.index("-c") + 1] == "8192"
+
+    p_capped = build_llama_server_command(model_path="/models/main.gguf", profile="t2-vulkan", max_ctx_cap=1024)
+    assert p_capped.args[p_capped.args.index("-c") + 1] == "1024"
+
+    p_uncapped = build_llama_server_command(model_path="/models/main.gguf", profile="t2-vulkan", max_ctx_cap=8192)
+    assert p_uncapped.args[p_uncapped.args.index("-c") + 1] == "4096"
+
+    p_win = build_llama_server_command(model_path="/models/main.gguf", platform_name="win32")
+    assert p_win.args[0] == "llama-server.exe"
+    cmd_win = p_win.render_shell_command()
+    assert "llama-server.exe" in cmd_win
+
+    p_lin = build_llama_server_command(model_path="/models/main.gguf", platform_name="linux")
+    assert p_lin.args[0] == "llama-server"
+    cmd_lin = p_lin.render_shell_command()
+    assert cmd_lin.startswith("llama-server")
+
+    p_custom = build_llama_server_command(model_path="/models/main.gguf", binary="custom-server", platform_name="win32")
+    assert p_custom.args[0] == "custom-server"
+
+    p_none = build_llama_server_command(model_path="/models/main.gguf", mode="none")
+    assert p_none.estimated_extra_ram_mb == 0
+
+    p_simple = build_llama_server_command(model_path="/models/main.gguf", mode="ngram-simple")
+    assert p_simple.estimated_extra_ram_mb == 0
+
+    p_mod = build_llama_server_command(model_path="/models/main.gguf", mode="ngram-mod")
+    assert p_mod.estimated_extra_ram_mb == 16
+
+    runner = CliRunner()
+    res_cpu = runner.invoke(cli, ["llama-cmd", "--model", "main.gguf", "--profile", "t1-cpu"])
+    assert res_cpu.exit_code == 0
+    assert "-c 2048" in res_cpu.output
+
+    res_vul = runner.invoke(cli, ["llama-cmd", "--model", "main.gguf", "--profile", "t2-vulkan"])
+    assert res_vul.exit_code == 0
+    assert "-c 4096" in res_vul.output
+
+    res_explicit = runner.invoke(cli, ["llama-cmd", "--model", "main.gguf", "--profile", "t1-cpu", "--ctx-size", "8192"])
+    assert res_explicit.exit_code == 0
+    assert "-c 8192" in res_explicit.output
