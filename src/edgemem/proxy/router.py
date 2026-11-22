@@ -6,6 +6,8 @@ from typing import Any, Mapping
 import urllib.parse
 
 from edgemem.config import EdgeMemConfig
+from edgemem.proxy.budgeter import ContextBudgeter, ContextDecision
+from edgemem.proxy.watchdog import RamPressureWatchdog
 
 
 def is_localhost_url(url: str) -> bool:
@@ -27,6 +29,7 @@ class RouteTarget:
     timeout_s: float
     reason: str
     is_external: bool
+    decision: ContextDecision | None = None
 
     @property
     def api_key(self) -> str | None:
@@ -36,11 +39,24 @@ class RouteTarget:
 
 
 class HybridRouter:
-    def __init__(self, config: EdgeMemConfig) -> None:
+    def __init__(
+        self,
+        config: EdgeMemConfig,
+        budgeter: ContextBudgeter | None = None,
+        watchdog: RamPressureWatchdog | None = None,
+    ) -> None:
         self.config = config
+        self.watchdog = watchdog or RamPressureWatchdog(config.resources)
+        self.budgeter = budgeter or ContextBudgeter(config, watchdog=self.watchdog)
 
-    def _build_local_target(self, body: dict[str, Any], reason: str) -> RouteTarget:
-        model = body.get("model") or self.config.model
+    def _build_local_target(
+        self,
+        body: dict[str, Any],
+        reason: str,
+        override_model: str | None = None,
+        decision: ContextDecision | None = None,
+    ) -> RouteTarget:
+        model = override_model or body.get("model") or self.config.model
         base_url = self.config.upstream_base_url
         return RouteTarget(
             tier="local",
@@ -51,6 +67,7 @@ class HybridRouter:
             timeout_s=self.config.routing.local_timeout_s,
             reason=reason,
             is_external=not is_localhost_url(base_url),
+            decision=decision,
         )
 
     def _build_cloud_target(
@@ -58,6 +75,7 @@ class HybridRouter:
         body: dict[str, Any],
         reason: str,
         override_model: str | None = None,
+        decision: ContextDecision | None = None,
     ) -> RouteTarget:
         model = (
             override_model
@@ -74,6 +92,7 @@ class HybridRouter:
             timeout_s=self.config.cloud.timeout_s,
             reason=reason,
             is_external=True,
+            decision=decision,
         )
 
     def select_target(
@@ -108,6 +127,26 @@ class HybridRouter:
         strategy = self.config.routing.strategy
         if strategy == "cloud_only" and self.config.cloud.enabled:
             return self._build_cloud_target(body, reason="cloud_only")
+
+        if self.config.resources.enabled:
+            cloud_avail = bool(self.config.cloud.enabled and strategy != "local_only")
+            decision = self.budgeter.evaluate(
+                prompt_tokens=est_prompt_tokens,
+                requested_max_tokens=body.get("max_tokens"),
+                cloud_available=cloud_avail,
+            )
+            if decision.should_escalate_cloud:
+                return self._build_cloud_target(
+                    body,
+                    reason=decision.escalate_reason or "context_budget_exceeded",
+                    decision=decision,
+                )
+            return self._build_local_target(
+                body,
+                reason="default_local",
+                override_model=decision.downshift_model,
+                decision=decision,
+            )
 
         if (
             strategy == "local_first"

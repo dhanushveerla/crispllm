@@ -1,6 +1,6 @@
 """EdgeMem CLI - console entrypoint.
 
-Supports: edgemem serve, edgemem init, edgemem status, edgemem stats, edgemem slice, edgemem memory.
+Supports: edgemem serve, edgemem init, edgemem status, edgemem stats, edgemem slice, edgemem memory, edgemem unload.
 """
 
 from __future__ import annotations
@@ -195,8 +195,59 @@ def status(config_path: Path | None) -> None:
         cloud_reqs = data.get("cloud_requests", 0)
         fallbacks = data.get("fallback_escalations", 0)
         click.echo(f"Routing: local={local_reqs}, cloud={cloud_reqs}, fallbacks={fallbacks}")
+        if "system_memory" in data and isinstance(data["system_memory"], dict):
+            sm = data["system_memory"]
+            avail = sm.get("available_mb")
+            total = sm.get("total_mb")
+            pressure = sm.get("pressure", "unknown")
+            if avail is not None and total is not None:
+                click.echo(f"System RAM: {avail:.1f} MB free / {total:.1f} MB ({pressure})")
+            else:
+                click.echo(f"System RAM: pressure={pressure}")
+        if "resources" in data and isinstance(data["resources"], dict):
+            res = data["resources"]
+            backend = res.get("local_backend", "auto")
+            max_c = res.get("effective_max_ctx", "N/A")
+            esc_t = res.get("effective_escalate_tokens", "N/A")
+            click.echo(f"Context Budget: backend={backend}, max_ctx={max_c}, escalate_at={esc_t} tok")
     except httpx.ConnectError:
         click.echo(f"EdgeMem not running at {url}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option("--model", default=None, help="Model name to unload (defaults to configured model).")
+@click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path), help="Path to edgemem.toml configuration file.")
+def unload(model: str | None, config_path: Path | None) -> None:
+    """Manually unload idle local model weights to free RAM/VRAM."""
+    cfg = load_config(config_path)
+    target_model = model or cfg.model
+    backend = cfg.resources.local_backend
+    if backend == "auto":
+        from edgemem.proxy.budgeter import detect_local_backend
+
+        backend = detect_local_backend(cfg.upstream_base_url, cfg.resources.local_backend)
+
+    if backend != "ollama":
+        click.echo(f"Idle unload only supported for Ollama backends (detected: {backend}).")
+        return
+
+    import httpx
+    from edgemem.proxy.unloader import get_ollama_generate_url
+
+    url = get_ollama_generate_url(cfg.upstream_base_url)
+    try:
+        resp = httpx.post(url, json={"model": target_model, "keep_alive": 0}, timeout=5.0)
+        if resp.status_code == 200:
+            click.echo(f"Unloaded model '{target_model}' via Ollama API ({url}).")
+        else:
+            click.echo(f"Failed to unload '{target_model}': HTTP {resp.status_code}", err=True)
+            sys.exit(1)
+    except httpx.ConnectError:
+        click.echo(f"Ollama server not reachable at {url}", err=True)
+        sys.exit(1)
+    except Exception as exc:
+        click.echo(f"Unload error: {exc}", err=True)
         sys.exit(1)
 
 

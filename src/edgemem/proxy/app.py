@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ from edgemem.privacy.redactor import (
 )
 from edgemem.privacy.stream_restorer import StreamRestorer
 from edgemem.proxy.auth import EdgeMemAuthMiddleware
+from edgemem.proxy.budgeter import ContextBudgeter
 from edgemem.proxy.mcp_server import create_mcp_server, create_mcp_starlette_app
 from edgemem.proxy.middleware import MemoryMiddleware
 from edgemem.proxy.router import HybridRouter, RouteTarget
@@ -38,6 +40,8 @@ from edgemem.proxy.telemetry import (
     Timer,
     get_rss_mb,
 )
+from edgemem.proxy.unloader import IdleUnloadWorker
+from edgemem.proxy.watchdog import RamPressureWatchdog
 
 logger = logging.getLogger("edgemem.proxy")
 
@@ -91,6 +95,26 @@ def _prepare_payload_for_target(
         for k, v in target.extra_body.items():
             if k not in upstream:
                 upstream[k] = v
+
+    if target.tier == "local" and target.decision and target.decision.inject_ollama_num_ctx:
+        raw_options = upstream.get("options")
+        options = dict(raw_options) if isinstance(raw_options, dict) else {}
+        if "num_ctx" in options and options["num_ctx"]:
+            options["num_ctx"] = min(int(options["num_ctx"]), target.decision.pressure_ctx_cap)
+        else:
+            options["num_ctx"] = target.decision.selected_num_ctx
+        upstream["options"] = options
+    elif target.tier == "cloud":
+        if "options" in upstream:
+            if isinstance(upstream["options"], dict):
+                options = dict(upstream["options"])
+                options.pop("num_ctx", None)
+                if options:
+                    upstream["options"] = options
+                else:
+                    upstream.pop("options", None)
+            else:
+                upstream.pop("options", None)
 
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if target.api_key:
@@ -265,7 +289,10 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
     memory_store = MemoryStore(cfg.memory.db_path)
     telemetry_store = TelemetryStore(cfg.memory.db_path)
     memory_middleware = MemoryMiddleware(memory_store, cfg.memory)
-    router = HybridRouter(cfg)
+    watchdog = RamPressureWatchdog(cfg.resources)
+    budgeter = ContextBudgeter(cfg)
+    router = HybridRouter(cfg, budgeter=budgeter, watchdog=watchdog)
+    unloader = IdleUnloadWorker(cfg, http_client=None)
     redaction_config = RedactionConfig(
         enabled=cfg.privacy.enabled,
         redact_secrets=cfg.privacy.redact_secrets,
@@ -292,6 +319,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
             ),
         )
 
+        unloader._http_client = client
         mcp_server._edgemem_set_telemetry(tel, cfg)
 
         app.state.edgemem_config = cfg
@@ -304,15 +332,23 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         app.state.edgemem_router = router
         app.state.edgemem_redactor = redactor
         app.state.edgemem_counters = counters
+        app.state.edgemem_watchdog = watchdog
+        app.state.edgemem_budgeter = budgeter
+        app.state.edgemem_unloader = unloader
+        app.state.edgemem_last_num_ctx = None
 
         if cfg.memory.enabled and cfg.memory.consolidation_enabled:
             consolidation_worker.start()
+
+        if cfg.resources.enabled and cfg.resources.idle_unload_enabled:
+            unloader.start()
 
         try:
             session_mgr = mcp_server.session_manager
             async with session_mgr.run():
                 yield
         finally:
+            await unloader.stop()
             await consolidation_worker.stop()
             await client.aclose()
             memory_store.close()
@@ -328,33 +364,75 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
     app.state.edgemem_router = router
     app.state.edgemem_redactor = redactor
     app.state.edgemem_counters = counters
+    app.state.edgemem_watchdog = watchdog
+    app.state.edgemem_budgeter = budgeter
+    app.state.edgemem_unloader = unloader
+    app.state.edgemem_last_num_ctx = None
 
     @app.get("/health")
     async def health(request: Request) -> JSONResponse:
         c: EdgeMemConfig = request.app.state.edgemem_config
         mem_store: MemoryStore = request.app.state.edgemem_memory_store
         cnt: ProxyCounters = request.app.state.edgemem_counters
+        watchdog: RamPressureWatchdog | None = getattr(
+            request.app.state, "edgemem_watchdog", None
+        )
+        budgeter: ContextBudgeter | None = getattr(
+            request.app.state, "edgemem_budgeter", None
+        )
+        unloader: IdleUnloadWorker | None = getattr(
+            request.app.state, "edgemem_unloader", None
+        )
+        last_num_ctx = getattr(request.app.state, "edgemem_last_num_ctx", None)
+
         mem_stats = mem_store.stats()
         stats = cnt.snapshot()
-        return JSONResponse(
-            {
-                "status": "ok",
-                "upstream_base_url": c.upstream_base_url,
-                "model": c.model,
-                "rss_mb": round(get_rss_mb(), 2),
-                "memory_enabled": c.memory.enabled,
-                "facts_count": mem_stats["facts_count"],
-                "memory_tiers": mem_store.tier_counts(),
-                "privacy_enabled": c.privacy.enabled,
-                "cloud_enabled": c.cloud.enabled,
-                "local_requests": stats["local_requests"],
-                "cloud_requests": stats["cloud_requests"],
-                "fallback_escalations": stats["fallback_escalations"],
-                "secrets_redacted_total": stats["secrets_redacted_total"],
-                "auth_enabled": bool(c.security.resolve_auth_token()),
-                "allow_remote_v1": c.security.allow_remote_v1,
+
+        system_memory_data = None
+        if watchdog is not None:
+            snap = watchdog.snapshot()
+            system_memory_data = {
+                "total_mb": round(snap.memory.total_mb, 2) if snap.memory else None,
+                "available_mb": round(snap.memory.available_mb, 2) if snap.memory else None,
+                "used_percent": round(snap.memory.used_percent, 2) if snap.memory else None,
+                "pressure": snap.pressure,
+                "source": snap.memory.source if snap.memory else None,
             }
-        )
+
+        resources_data = None
+        if budgeter is not None:
+            current_pressure = watchdog.snapshot().pressure if watchdog is not None else "normal"
+            resources_data = {
+                "local_backend": budgeter.backend,
+                "effective_max_ctx": budgeter.pressure_cap(current_pressure),
+                "effective_escalate_tokens": budgeter.escalate_threshold(current_pressure),
+                "last_num_ctx": last_num_ctx,
+                "idle_unload_count": unloader.unload_count if unloader is not None else 0,
+            }
+
+        payload: dict[str, Any] = {
+            "status": "ok",
+            "upstream_base_url": c.upstream_base_url,
+            "model": c.model,
+            "rss_mb": round(get_rss_mb(), 2),
+            "memory_enabled": c.memory.enabled,
+            "facts_count": mem_stats["facts_count"],
+            "memory_tiers": mem_store.tier_counts(),
+            "privacy_enabled": c.privacy.enabled,
+            "cloud_enabled": c.cloud.enabled,
+            "local_requests": stats["local_requests"],
+            "cloud_requests": stats["cloud_requests"],
+            "fallback_escalations": stats["fallback_escalations"],
+            "secrets_redacted_total": stats["secrets_redacted_total"],
+            "auth_enabled": bool(c.security.resolve_auth_token()),
+            "allow_remote_v1": c.security.allow_remote_v1,
+        }
+        if system_memory_data is not None:
+            payload["system_memory"] = system_memory_data
+        if resources_data is not None:
+            payload["resources"] = resources_data
+
+        return JSONResponse(payload)
 
     @app.get("/v1/models")
     async def list_models(request: Request) -> JSONResponse:
@@ -408,6 +486,15 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
 
         input_tokens = est_tokens_sent
         target = app_router.select_target(body, request.headers, input_tokens)
+        if target.decision is not None:
+            request.app.state.edgemem_last_num_ctx = target.decision.selected_num_ctx
+            if target.decision.trigger_local_unload:
+                active_unloader: IdleUnloadWorker | None = getattr(
+                    request.app.state, "edgemem_unloader", None
+                )
+                if active_unloader is not None:
+                    asyncio.create_task(active_unloader.unload_now())
+
         upstream_body, session, headers = _prepare_payload_for_target(
             body, target, app_redactor, app_router
         )
@@ -423,6 +510,9 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
 
         worker: ConsolidationWorker | None = getattr(
             request.app.state, "edgemem_consolidation_worker", None
+        )
+        active_unloader = getattr(
+            request.app.state, "edgemem_unloader", None
         )
         if is_stream:
             return await _handle_streaming_request(
@@ -443,6 +533,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 tokens_saved,
                 compacted_turns,
                 worker=worker,
+                unloader=active_unloader,
             )
         else:
             resp = await _handle_non_streaming_request(
@@ -462,6 +553,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 est_tokens_sent,
                 tokens_saved,
                 compacted_turns,
+                unloader=active_unloader,
             )
             if worker is not None:
                 worker.notify_turn()
@@ -492,6 +584,7 @@ async def _handle_non_streaming_request(
     est_tokens_sent: int,
     tokens_saved: int,
     compacted_turns: int,
+    unloader: IdleUnloadWorker | None = None,
 ) -> Response:
     timer = Timer()
     timer.__enter__()
@@ -543,6 +636,8 @@ async def _handle_non_streaming_request(
 
     if target.tier == "local":
         counters.inc_local()
+        if unloader is not None:
+            unloader.record_local_activity(target.model)
     else:
         counters.inc_cloud()
 
@@ -680,6 +775,7 @@ async def _handle_streaming_request(
     tokens_saved: int,
     compacted_turns: int,
     worker: ConsolidationWorker | None = None,
+    unloader: IdleUnloadWorker | None = None,
 ) -> StreamingResponse:
     fallback_target = (
         router.cloud_fallback_target(body) if target.tier == "local" else None
@@ -756,6 +852,8 @@ async def _handle_streaming_request(
             timer.__exit__(None, None, None)
             if target.tier == "local":
                 counters.inc_local()
+                if unloader is not None:
+                    unloader.record_local_activity(target.model)
             else:
                 counters.inc_cloud()
 

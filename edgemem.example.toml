@@ -147,3 +147,49 @@ allow_remote_v1 = false
 # Leave empty to allow unrestricted local path access.
 # allowed_repo_roots = ["/home/user/projects"]
 allowed_repo_roots = []
+
+[resources]
+# Enable active RAM/VRAM watchdog, dynamic context budgeting, and idle model unloading.
+enabled = true
+
+# Local LLM backend type: "auto", "ollama", "llama_server", "openai"
+local_backend = "auto"
+
+# Dynamically adjust num_ctx on local Ollama requests according to prompt size and RAM pressure.
+dynamic_num_ctx = true
+
+# Discrete context buckets to minimize KV-cache reallocation overhead.
+ctx_buckets = [2048, 4096, 8192]
+
+# Maximum context allowed on local model under normal RAM conditions.
+max_local_ctx = 8192
+
+# Maximum context allowed under soft RAM pressure.
+soft_max_ctx = 2048
+
+# Hard floor minimum context allowed under hard RAM pressure before cloud escalation.
+hard_min_ctx = 2048
+
+# Assumed headroom for generated completion tokens when computing context requirements.
+default_output_tokens = 512
+
+# Available system RAM threshold (in MB) below which soft pressure is triggered.
+soft_free_mb = 1024.0
+
+# Available system RAM threshold (in MB) below which hard pressure is triggered.
+hard_free_mb = 512.0
+
+# Hysteresis buffer in MB to prevent pressure state flapping around thresholds.
+hysteresis_mb = 64.0
+
+# Polling interval in seconds for sampling system memory info.
+watchdog_poll_s = 2.0
+
+# Optional smaller model to downshift to under soft or local-only hard pressure.
+# downshift_model = "qwen2.5-coder:1.5b"
+
+# Automatically unload local model from memory after a period of inactivity.
+idle_unload_enabled = true
+
+# Inactivity duration in seconds before triggering local model unload (keep_alive: 0).
+idle_unload_s = 300.0

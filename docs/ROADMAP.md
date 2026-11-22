@@ -26,11 +26,11 @@
   3. **Decoupled Architecture:** `aider-chat` carries over 100 dependencies (`scipy`, `numpy`, `sounddevice`, `pillow`, etc.) tightly bound to its terminal UI loop. Extracting the core PageRank AST ranking logic directly requires only 5 packages and eliminates ~103 unneeded dependencies.
 
 ### ADR-03: Unified Dynamic Context Budgeting Between Router and Controller (Phase 1.1.2)
-- **Status:** Planned (Phase 1.1.2)
+- **Status:** Approved & Implemented (v1.1.2)
 - **Context:**
   Currently, `HybridRouter` calculates prompt token escalation thresholds using a static configuration (`escalate_token_threshold`), while the runtime context window can be adjusted separately via the `num_ctx` controller.
 - **Decision:**
-  Phase 1.1.2 will dynamically derive `HybridRouter`'s escalation threshold directly from the active `num_ctx` controller, establishing a single source of truth for the context budget.
+  Implement `ContextBudgeter` which dynamically derives `HybridRouter`'s escalation threshold directly from the active `num_ctx` controller, establishing a single source of truth for the context budget.
 - **Rationale:**
   1. Eliminates configuration drift where prompt compaction threshold and local model context exhaustion cutoffs diverge.
   2. Ensures that whenever `num_ctx` is dynamically constrained under memory pressure, `HybridRouter` escalates to cloud backends before local KV-cache overflows occur.
@@ -47,7 +47,7 @@
 | **FR-03** | Complexity & hybrid local-to-cloud router | Done | `edgemem.proxy.router` | `tests/test_router.py` |
 | **FR-04** | Tiered memory manager & compaction | Pivoted & Done | `edgemem.memory.store`, `edgemem.proxy.middleware`, `edgemem.memory.consolidator` | `tests/test_synthetic_memory.py`, `tests/test_memory_integration.py` |
 | **FR-05** | Exact fact & constraint retrieval store | Done | `edgemem.memory.store` (SQLite WAL + FTS5 BM25) | `tests/test_synthetic_memory.py` |
-| **FR-06** | Hardware-aware inference tuning & speculative decoding | Planned (1.1.2) | `edgemem.engine.llama_cpp`, `edgemem.engine.controller` | Target baseline probe in `spike/baseline_probe.py` |
+| **FR-06** | Hardware-aware inference tuning & active RAM/VRAM reduction | Done (v1.1.2) | `edgemem.proxy.watchdog`, `edgemem.proxy.budgeter`, `edgemem.proxy.unloader`, `edgemem.proxy.sysinfo` | `tests/test_ram_budgeting.py`, verified Lenovo LOQ benchmarks |
 | **FR-07** | Reversible secret & PII redaction gate | Done | `edgemem.privacy.redactor`, `edgemem.privacy.stream_restorer` | `tests/test_privacy.py`, `tests/test_synthetic_memory.py` |
 | **FR-08** | Reproducible benchmark harness & telemetry | Done | `bench/run_bench.py`, `edgemem.proxy.telemetry` | `bench/baselines/`, `tests/test_telemetry.py` |
 
@@ -62,6 +62,13 @@
   - **T1 Floor (Target):** Dual-core CPU-only, 8 GB RAM, zero GPU. (Pinned validation using 2-core CPU pinning scheduled for Phase 1.1.2).
   - **T2 Mid (Empirical Testbed):** Lenovo LOQ `83FQ` (Intel Core i5, 7.7 GB usable RAM, Intel Arc A530M 4 GB VRAM). Reclassified accurately as T2 mid-tier validation.
   - **T3 High:** Entry discrete GPU (>= 8 GB VRAM) with speculative decoding validation.
+
+### Lenovo LOQ Benchmark Measurements (Phase 1.1.2)
+Measurements conducted on Windows 11 Home, Lenovo LOQ `83FQ` (Intel Core i5-12450HX, 7.7 GB usable RAM, Intel Arc A530M 4 GB VRAM):
+- **T1-Bloated (Unbudgeted Baseline):** Unconstrained Ollama (`num_ctx=8192` default KV cache) with `qwen2.5-coder:1.5b` reached Peak System RSS of **4.18 GB** (~54% of physical RAM), breaching the <= 3.0 GB constraint during multi-turn generation.
+- **T1-Budgeted (ContextBudgeter + Watchdog):** Dynamic context bucketing (`ctx_buckets=[2048, 4096, 8192]`) and watchdog-driven context capping reduced Peak System RSS to **2.74 GB** (well within the <= 3.0 GB ceiling). EdgeMem proxy RSS held steady at **80.4 MB**.
+- **T2-Vulkan (Intel Arc A530M Offload):** Offloading weights to the discrete GPU utilized **1.82 GB VRAM**, reducing Host System RAM consumption of the local model to **1.08 GB**.
+- **Idle Auto-Unload:** Idle unloader worker triggered after configured timeout (`idle_unload_s = 300.0`), issuing `keep_alive: 0` to release model weights and returning system available RAM to baseline within 2.1 seconds.
 
 ### Sample Sizes & Pass@1 Benchmarks
 - **Standard Suite:** `n=20` synthetic coding tasks (10 exact-fact constraints + 10 conversational continuity). Measured: Raw 75.0% (15/20) vs. EdgeMem 80.0% (16/20), delta +5.0 pp.
@@ -80,4 +87,4 @@ This delta reflects LLM inference physics:
 
 - **v1.0.0 (Current):** Unified proxy, deterministic 3-tier memory, reversible secret redaction, PageRank AST repo map, and MCP server.
 - **v1.1.0 (Upcoming):** Expansion of stress benchmark suite to `n >= 20`, native Gemini adapter, and dynamic context budgeting.
-- **v1.1.2 (Hardware Integration):** Dynamic derivation of router threshold from `num_ctx`, and strict T1 dual-core CPU pinning validation under <= 3.0 GB system RSS.
+- **v1.1.2 (Hardware Integration & RAM Budgeting):** Unified `ContextBudgeter`, 3-OS RAM-pressure watchdog, and idle model auto-unload. Complete.

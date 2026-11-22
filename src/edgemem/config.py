@@ -107,6 +107,27 @@ class SecurityConfig:
 
 
 @dataclass
+class ResourcesConfig:
+    """Configuration for active RAM/VRAM watchdog, dynamic context budgeting, and idle model unloading."""
+
+    enabled: bool = True
+    local_backend: str = "auto"
+    dynamic_num_ctx: bool = True
+    ctx_buckets: list[int] = field(default_factory=lambda: [2048, 4096, 8192])
+    max_local_ctx: int = 8192
+    soft_max_ctx: int = 2048
+    hard_min_ctx: int = 2048
+    default_output_tokens: int = 512
+    soft_free_mb: float = 1024.0
+    hard_free_mb: float = 512.0
+    hysteresis_mb: float = 64.0
+    watchdog_poll_s: float = 2.0
+    downshift_model: str | None = None
+    idle_unload_enabled: bool = True
+    idle_unload_s: float = 300.0
+
+
+@dataclass
 class EdgeMemConfig:
     """Full EdgeMem configuration."""
 
@@ -126,6 +147,7 @@ class EdgeMemConfig:
     routing: RoutingConfig = field(default_factory=RoutingConfig)
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    resources: ResourcesConfig = field(default_factory=ResourcesConfig)
 
     @property
     def upstream_api_key(self) -> str | None:
@@ -167,6 +189,7 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
     routing = raw.get("routing", {})
     privacy = raw.get("privacy", {})
     security = raw.get("security", {})
+    resources = raw.get("resources", {})
 
     memory_cfg = MemoryConfig(
         enabled=memory.get("enabled", MemoryConfig.enabled),
@@ -258,6 +281,24 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         allowed_repo_roots=list(security.get("allowed_repo_roots", [])),
     )
 
+    resources_cfg = ResourcesConfig(
+        enabled=bool(resources.get("enabled", ResourcesConfig.enabled)),
+        local_backend=str(resources.get("local_backend", ResourcesConfig.local_backend)),
+        dynamic_num_ctx=bool(resources.get("dynamic_num_ctx", ResourcesConfig.dynamic_num_ctx)),
+        ctx_buckets=list(resources.get("ctx_buckets", [2048, 4096, 8192])),
+        max_local_ctx=int(resources.get("max_local_ctx", ResourcesConfig.max_local_ctx)),
+        soft_max_ctx=int(resources.get("soft_max_ctx", ResourcesConfig.soft_max_ctx)),
+        hard_min_ctx=int(resources.get("hard_min_ctx", ResourcesConfig.hard_min_ctx)),
+        default_output_tokens=int(resources.get("default_output_tokens", ResourcesConfig.default_output_tokens)),
+        soft_free_mb=float(resources.get("soft_free_mb", ResourcesConfig.soft_free_mb)),
+        hard_free_mb=float(resources.get("hard_free_mb", ResourcesConfig.hard_free_mb)),
+        hysteresis_mb=float(resources.get("hysteresis_mb", ResourcesConfig.hysteresis_mb)),
+        watchdog_poll_s=float(resources.get("watchdog_poll_s", ResourcesConfig.watchdog_poll_s)),
+        downshift_model=resources.get("downshift_model", ResourcesConfig.downshift_model),
+        idle_unload_enabled=bool(resources.get("idle_unload_enabled", ResourcesConfig.idle_unload_enabled)),
+        idle_unload_s=float(resources.get("idle_unload_s", ResourcesConfig.idle_unload_s)),
+    )
+
     return EdgeMemConfig(
         host=server.get("host", EdgeMemConfig.host),
         port=server.get("port", EdgeMemConfig.port),
@@ -273,6 +314,7 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         routing=routing_cfg,
         privacy=privacy_cfg,
         security=security_cfg,
+        resources=resources_cfg,
     )
 
 
