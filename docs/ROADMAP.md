@@ -94,8 +94,8 @@ This delta reflects LLM inference physics:
 
 ## 4. Milestone Schedule
 
-- **v1.0.0 (Current):** Unified proxy, deterministic 3-tier memory, reversible secret redaction, PageRank AST repo map, and MCP server.
-- **v1.1.0 (Upcoming):** Expansion of stress benchmark suite to `n >= 20`, native Gemini adapter, and dynamic context budgeting.
+- **v1.0.0 (Released):** Unified proxy, deterministic 3-tier memory, reversible secret redaction, PageRank AST repo map, and MCP server.
+- **v1.1.0 (Current - Released):** Full 3-OS platform parity & CI, 3-tier synthetic memory with async consolidation, RAM-pressure watchdog + ContextBudgeter, 1-hop AST symbol slicing + task-tier routing + prefix-cache prompting, speculative token generation (Cloud Predicted Outputs & llama-server presets), n=20 deterministic stress suite, fail-open hardening, and automated PyPI Trusted Publishing.
 - **v1.1.2 (Hardware Integration & RAM Budgeting):** Unified `ContextBudgeter`, 3-OS RAM-pressure watchdog, and idle model auto-unload. Complete.
 - **v1.1.3 (AST Symbol Slicing, Task-Tier Routing & Prefix Caching):**
   - **1-Hop AST Symbol & Call-Graph Slicer:** `SymbolDef` + `SymbolSliceResult` extraction with `mtime`-cached symbols; 0-hop body (~55%), 1-hop callees (~25%), 1-hop callers (~20%) budgeting with graceful query repo-map fallback. Exposed via CLI `edgemem slice --symbol` and MCP `edgemem_repo_map(focus_symbol=...)`.
@@ -106,8 +106,13 @@ This delta reflects LLM inference physics:
   - **Fail-Open Circuit Breaker:** Automatic retry on HTTP 400/422 with stripped prediction and 1800s TTL provider caching.
   - **llama-server Speculative Presets:** Exact llama.cpp b12631+ CLI support for `ngram-simple`, `ngram-mod`, `draft`, and `hybrid` with automated RAM-pressure safety guards and OS-safe shell command generation (`edgemem llama-cmd`).
   - **Speculative Acceptance Telemetry:** Tracking cloud and local speculative acceptance in `/health` and `edgemem status`. Complete.
-- **v1.1.5 (Stress Benchmark Expansion & Hardening Audit):**
+- **v1.1.5 (Stress Benchmark Expansion, Hardening & Release):**
   - **Part A:**
     - Recorded verified Phase 1.1.4 Lenovo LOQ speculative decoding benchmarks (3.07x on T1-CPU, 2.84x on T2-Vulkan).
     - Expanded long-context stress suite from `n=6` to `n=20` deterministic tasks across 4 balanced categories (`constraint_retention`, `contradiction_update`, `noisy_distractor`, `cross_turn_synthesis`), with `--limit`, `--dry-run`, and per-category sample-size reporting.
     - End-to-end fail-open hardening audit on `MemoryMiddleware`, `RamPressureWatchdog`, `TaskClassifier`, `PredictedOutputsEngine`, and background workers. Complete.
+  - **Part B:**
+    - Synchronized package version to `1.1.0` across `pyproject.toml`, `edgemem.__version__`, CLI `--version`, and MCP `serverInfo.version`.
+    - Generated Keep-a-Changelog formatted `CHANGELOG.md` covering all v1.1 phases.
+    - Rewrote `README.md` with progressive disclosure, architecture diagram, and verified Lenovo LOQ hardware benchmarks.
+    - Added automated two-job PyPI Trusted Publishing workflow (`.github/workflows/publish.yml`). Complete.

@@ -122,7 +122,7 @@ def test_backward_compatibility_defaults(tmp_path, monkeypatch):
         assert mcp_resp.status_code == 200
         init_data = mcp_resp.json()
         assert init_data.get("result", {}).get("serverInfo", {}).get("name") == "EdgeMem"
-        assert init_data.get("result", {}).get("serverInfo", {}).get("version") == "1.0.0"
+        assert init_data.get("result", {}).get("serverInfo", {}).get("version") == "1.1.0"
 
 
 def test_bearer_auth_via_env_var(tmp_path, monkeypatch):

@@ -1,3 +1,9 @@
 """EdgeMem — Lightweight unified memory & context proxy."""
+from __future__ import annotations
 
-__version__ = "1.0.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("edgemem")
+except PackageNotFoundError:
+    __version__ = "1.1.0"

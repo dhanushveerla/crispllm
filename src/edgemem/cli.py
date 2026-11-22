@@ -12,11 +12,12 @@ from pathlib import Path
 
 import click
 
+from edgemem import __version__
 from edgemem.config import EdgeMemConfig, default_toml_content, load_config
 
 
 @click.group()
-@click.version_option(package_name="edgemem")
+@click.version_option(__version__, "--version", "-v", package_name="edgemem")
 def cli() -> None:
     """EdgeMem - Lightweight unified memory & context proxy."""
 

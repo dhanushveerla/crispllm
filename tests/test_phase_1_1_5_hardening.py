@@ -252,3 +252,21 @@ class TestFailOpenChatCompletionsEndpoint:
                 assert resp.status_code == 200
                 data = resp.json()
                 assert data["choices"][0]["message"]["content"] == "Settlement verified."
+
+
+class TestVersionSync:
+    def test_version_string_and_cli_and_mcp(self):
+        from click.testing import CliRunner
+        from edgemem import __version__
+        from edgemem.cli import cli
+        from edgemem.proxy.mcp_server import create_mcp_server
+
+        assert __version__ == "1.1.0"
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--version"])
+        assert result.exit_code == 0
+        assert "1.1.0" in result.output
+
+        mcp = create_mcp_server()
+        assert mcp.version == "1.1.0"
