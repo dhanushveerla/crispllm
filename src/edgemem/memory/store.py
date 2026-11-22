@@ -13,6 +13,8 @@ from typing import Any
 
 import platformdirs
 
+from edgemem.privacy.redactor import sanitize_fact, sanitize_for_memory
+
 
 def compute_effective_salience(
     salience: float, age_days: float, access_count: int, half_life_days: float
@@ -296,6 +298,7 @@ class MemoryStore:
         salience: float = 1.0,
     ) -> int:
         now = time.time()
+        key, value = sanitize_fact(key, value)
         if tier is None:
             tier = "core" if pinned else "episodic"
         if tier == "core":
@@ -653,6 +656,7 @@ class MemoryStore:
     ) -> int:
         """Insert a turn summary episode."""
         now = time.time()
+        summary = sanitize_for_memory(summary)
         with self._lock:
             cur = self._conn.execute(
                 """

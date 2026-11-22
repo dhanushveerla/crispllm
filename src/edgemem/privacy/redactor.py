@@ -61,50 +61,108 @@ class RedactionSession:
         return token
 
 
+_PEM_PATTERN = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z0-9 ]*PRIVATE KEY-----"
+)
+_KNOWN_SECRETS_PATTERN = re.compile(
+    r"""
+    \b(?:
+        nvapi-[A-Za-z0-9_-]{20,}
+      | AIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])
+      | sk-(?:proj-|ant-|live-|test-)?[A-Za-z0-9_-]{20,}
+      | (?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}
+      | github_pat_[A-Za-z0-9_]{30,}
+      | AKIA[0-9A-Z]{16}\b
+      | xox[baprs]-[A-Za-z0-9-]{10,}
+      | eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}
+    )
+    """,
+    re.VERBOSE,
+)
+_CRED_URL_PATTERN = re.compile(
+    r"((?:postgres|postgresql|mysql|mongodb(?:\+srv)?|redis|amqp)://[^:\s/@]+:)([^@\s/]+)(@)"
+)
+_BEARER_PATTERN = re.compile(
+    r"(?i)(Bearer\s+)([A-Za-z0-9._~+/=-]{16,})"
+)
+_ENV_PATTERN = re.compile(
+    r'(?i)(\b[A-Z0-9_]*(?:API_KEY|SECRET_KEY|SECRET|PASSWORD|PASSWD|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY)\b\s*[:=]\s*["\']?)([^"\'\s,;]{8,})(["\']?)'
+)
+_EDGEMEM_PLACEHOLDER_PATTERN = re.compile(r"__EDGEMEM_[A-Z]+_\d+__")
+_ENV_SKIP_SUBSTRINGS = (
+    "your-key-here",
+    "changeme",
+    "example",
+    "dummy",
+    "test_key",
+    "[redacted_secret]",
+)
+_SECRET_KEY_PATTERN = re.compile(
+    r"(?i)\b[A-Z0-9_]*(?:API_KEY|SECRET_KEY|SECRET|PASSWORD|PASSWD|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY)\b"
+)
+
+
+def sanitize_for_memory(text: str) -> str:
+    if not text or not isinstance(text, str):
+        return text
+
+    text = _EDGEMEM_PLACEHOLDER_PATTERN.sub("[REDACTED_SECRET]", text)
+    text = _PEM_PATTERN.sub("[REDACTED_SECRET]", text)
+    text = _KNOWN_SECRETS_PATTERN.sub("[REDACTED_SECRET]", text)
+
+    def _sub_url(m: re.Match) -> str:
+        prefix, password, suffix = m.group(1), m.group(2), m.group(3)
+        if password == "[REDACTED_SECRET]":
+            return m.group(0)
+        return f"{prefix}[REDACTED_SECRET]{suffix}"
+
+    text = _CRED_URL_PATTERN.sub(_sub_url, text)
+
+    def _sub_bearer(m: re.Match) -> str:
+        prefix, token = m.group(1), m.group(2)
+        if token == "[REDACTED_SECRET]":
+            return m.group(0)
+        return f"{prefix}[REDACTED_SECRET]"
+
+    text = _BEARER_PATTERN.sub(_sub_bearer, text)
+
+    def _sub_env(m: re.Match) -> str:
+        prefix, val, suffix = m.group(1), m.group(2), m.group(3)
+        val_lower = val.lower()
+        if any(s in val_lower for s in _ENV_SKIP_SUBSTRINGS):
+            return m.group(0)
+        return f"{prefix}[REDACTED_SECRET]{suffix}"
+
+    text = _ENV_PATTERN.sub(_sub_env, text)
+    return text
+
+
+def sanitize_fact(key: str, value: str) -> tuple[str, str]:
+    clean_k = sanitize_for_memory(key)
+    clean_v = sanitize_for_memory(value)
+    if _SECRET_KEY_PATTERN.search(clean_k):
+        val_lower = clean_v.strip().lower()
+        if len(val_lower) >= 6 and not any(s in val_lower for s in _ENV_SKIP_SUBSTRINGS):
+            clean_v = "[REDACTED_SECRET]"
+    return clean_k, clean_v
+
+
 class SecretRedactor:
     def __init__(self, config: RedactionConfig | None = None) -> None:
         self.config = config or RedactionConfig()
-        self._pem_pattern = re.compile(
-            r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z0-9 ]*PRIVATE KEY-----"
-        )
-        self._known_secrets_pattern = re.compile(
-            r"""
-            \b(?:
-                nvapi-[A-Za-z0-9_-]{20,}
-              | AIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])
-              | sk-(?:proj-|ant-|live-|test-)?[A-Za-z0-9_-]{20,}
-              | (?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}
-              | github_pat_[A-Za-z0-9_]{30,}
-              | AKIA[0-9A-Z]{16}\b
-              | xox[baprs]-[A-Za-z0-9-]{10,}
-              | eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}
-            )
-            """,
-            re.VERBOSE,
-        )
-        self._cred_url_pattern = re.compile(
-            r"((?:postgres|postgresql|mysql|mongodb(?:\+srv)?|redis|amqp)://[^:\s/@]+:)([^@\s/]+)(@)"
-        )
-        self._bearer_pattern = re.compile(
-            r"(?i)(Bearer\s+)([A-Za-z0-9._~+/=-]{16,})"
-        )
-        self._env_pattern = re.compile(
-            r'(?i)(\b[A-Z0-9_]*(?:API_KEY|SECRET_KEY|SECRET|PASSWORD|PASSWD|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY)\b\s*[:=]\s*["\']?)([^"\'\s,;]{8,})(["\']?)'
-        )
+        self._pem_pattern = _PEM_PATTERN
+        self._known_secrets_pattern = _KNOWN_SECRETS_PATTERN
+        self._cred_url_pattern = _CRED_URL_PATTERN
+        self._bearer_pattern = _BEARER_PATTERN
+        self._env_pattern = _ENV_PATTERN
         self._email_pattern = re.compile(
             r"\b[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9.-]+\.[A-Za-z]{2,}|localhost)\b"
         )
         self._ipv4_pattern = re.compile(
             r"\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\b"
         )
-        self._placeholder_restore_pattern = re.compile(r"__EDGEMEM_[A-Z]+_\d+__")
-        self._env_skip_substrings = (
-            "your-key-here",
-            "changeme",
-            "example",
-            "dummy",
-            "test_key",
-        )
+        self._placeholder_restore_pattern = _EDGEMEM_PLACEHOLDER_PATTERN
+        self._env_skip_substrings = _ENV_SKIP_SUBSTRINGS
         self._email_skip_suffixes = (
             "@example.com",
             ".example.com",
@@ -284,3 +342,7 @@ class SecretRedactor:
                     if isinstance(args, str):
                         fn_call["arguments"] = self.restore_text(args, session)
         return copied
+
+
+Redactor = SecretRedactor
+

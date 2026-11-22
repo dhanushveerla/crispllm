@@ -17,6 +17,7 @@ from typing import Any, Mapping
 from edgemem.config import MemoryConfig
 from edgemem.memory.extractor import extract_facts_from_messages
 from edgemem.memory.store import Fact, MemoryStore, compute_effective_salience
+from edgemem.privacy.redactor import sanitize_fact, sanitize_for_memory
 
 logger = logging.getLogger("edgemem.proxy.memory")
 
@@ -216,16 +217,19 @@ class MemoryMiddleware:
             if self.config.auto_extract and len(user_indices) > 1:
                 extracted = extract_facts_from_messages(messages)
                 for ef in extracted:
+                    clean_k, clean_v = sanitize_fact(ef.key, ef.value)
+                    if clean_v == "[REDACTED_SECRET]" and ef.kind in ("constant", "note"):
+                        continue
                     self.store.upsert_fact(
                         session_id=session_id,
-                        key=ef.key,
-                        value=ef.value,
+                        key=clean_k,
+                        value=clean_v,
                         kind=ef.kind,
                         scope=ef.scope,
                         source_turn=ef.source_turn,
                         pinned=ef.pinned,
                     )
-                facts_extracted = len(extracted)
+                    facts_extracted += 1
 
             core_facts: list[Fact] = []
             seen_core_keys: set[tuple[str, str]] = set()
@@ -344,13 +348,13 @@ class MemoryMiddleware:
                             self.store.add_episode(
                                 session_id=session_id,
                                 role="user",
-                                summary=text[:300],
+                                summary=sanitize_for_memory(text[:300]),
                                 raw_tokens=estimate_tokens(text),
                             )
                             self.store.add_episode(
                                 session_id=session_id,
                                 role="assistant",
-                                summary=asst_text[:300],
+                                summary=sanitize_for_memory(asst_text[:300]),
                                 raw_tokens=estimate_tokens(asst_text),
                             )
                             new_messages[idx] = {"role": "user", "content": "[Compacted earlier turn]"}
@@ -369,7 +373,7 @@ class MemoryMiddleware:
                         self.store.add_episode(
                             session_id=session_id,
                             role=role,
-                            summary=text[:300],
+                            summary=sanitize_for_memory(text[:300]),
                             raw_tokens=turn_tokens,
                         )
                         new_messages[idx] = {"role": role, "content": "[Compacted earlier turn]"}

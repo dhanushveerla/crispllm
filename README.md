@@ -2,7 +2,7 @@
 
 > Lightweight, unified memory & context proxy for AI coding on resource-constrained hardware.
 
-EdgeMem is a local-first, zero-bloat OpenAI-compatible LLM proxy and Model Context Protocol (MCP) server. It equips small local coding models (Ollama, vLLM, llama.cpp) and cloud APIs with tiered architectural memory, automatic middle-turn context compaction, reversible zero-dependency secret redaction, and intelligent local-to-cloud escalation — maintaining a **sub-85 MB RSS footprint** with **zero vector databases, zero embedding models, and zero extra LLM calls** on the request hot path.
+EdgeMem is a local-first, zero-bloat OpenAI-compatible LLM proxy and Model Context Protocol (MCP) server. It equips small local coding models (Ollama, vLLM, llama.cpp) and cloud APIs with tiered architectural memory, automatic middle-turn context compaction, reversible zero-dependency secret redaction, and intelligent local-to-cloud escalation — maintaining a **sub-85 MB EdgeMem proxy RSS footprint (not including local LLM weights)** with **zero vector databases, zero embedding models, and zero extra LLM calls** on the request hot path.
 
 ### Supported Platforms
 - **Tier 1 (Fully Supported)**: **Linux and macOS (Python 3.11+)**
@@ -74,34 +74,36 @@ EdgeMem provides two interfaces on port 8080: an OpenAI-compatible `/v1` proxy a
 
 All metrics are measured empirically using `bench/run_bench.py` and committed in `bench/baselines/`.
 
-### 1. 20-Task Standard Suite (`nvidia/nemotron-3.5-bolt-e4b`)
+### 1. Standard Suite (`n=20`, `nvidia/nemotron-3.5-bolt-e4b`)
 Evaluation across 20 synthetic coding tasks (10 exact constraint adherence + 10 conversational continuity):
 
 | Metric | Raw Baseline (`phase1b`) | EdgeMem Proxy (`phase2b`) | Delta / Impact |
 |---|---|---|---|
-| **Pass@1 (Overall)** | **75.0%** (15/20) | **80.0%** (16/20) | **+5.0 pp** |
-| Pass@1 exact_fact | 90.0% (9/10) | 90.0% (9/10) | Parity |
-| Pass@1 continuity | 60.0% (6/10) | 70.0% (7/10) | **+10.0 pp** |
+| **Pass@1 (Overall, n=20)** | **75.0%** (15/20) | **80.0%** (16/20) | **+5.0 pp** |
+| Pass@1 exact_fact (n=10) | 90.0% (9/10) | 90.0% (9/10) | Parity |
+| Pass@1 continuity (n=10) | 60.0% (6/10) | 70.0% (7/10) | **+10.0 pp** |
 | Total Prompt Tokens | 8,056 | 9,004 | Injected architectural facts |
 | Total Completion Tokens | 5,867 | 5,056 | -13.8% tokens generated |
 | Total Wall Time | 73.24 s | 61.08 s | **-16.6% faster** |
 | Mean TTFT | 3,662.2 ms | 3,054.1 ms | **-608.1 ms latency** |
 | Mean Generation tok/s | 78.89 | 80.45 | Consistent throughput |
-| **Proxy RSS** | — | **79.7 MB** | **< 85 MB target** |
+| **EdgeMem Proxy RSS** | — | **79.7 MB** | **< 85 MB target (proxy only)** |
 
-### 2. 6-Task Long-Context Stress Suite (`temperature=0.0`, ~7.2k tokens/task)
+### 2. Long-Context Stress Suite (`n=6`, `temperature=0.0`, ~7.2k tokens/task)
 Evaluation under multi-turn dialogue with large middle-turn code boilerplate:
 
 | Metric | Raw Baseline (`stress-raw-temp0`) | EdgeMem Proxy (`stress-edgemem-temp0`) | Delta / Impact |
 |---|---|---|---|
-| **Pass@1 (Overall)** | **16.7%** (1/6) | **50.0%** (3/6) | **3x improvement** |
+| **Pass@1 (Overall, n=6)** | **16.7%** (1/6) | **50.0%** (3/6) | **3x improvement** |
 | Total Prompt Tokens | 43,099 | 5,195 | **-87.9% reduction** (-37,904 tokens) |
 | Mean Prompt Tokens | 7,183.2 | 865.8 | -87.9% prompt overhead |
 | Total Completion Tokens | 5,683 | 4,908 | Compact, accurate answers |
 | Total Wall Time | 99.24 s | 65.16 s | **-34.3% faster** (-34.08 s) |
 | Mean TTFT | 16,540.7 ms | 10,860.3 ms | **-5,680.4 ms TTFT** |
 | Mean Generation tok/s | 64.57 | 75.97 | +17.7% generation speed |
-| **Proxy RSS** | — | **81.8 MB** | **< 85 MB target** |
+| **EdgeMem Proxy RSS** | — | **81.8 MB** | **< 85 MB target (proxy only)** |
+
+While context compaction slashes prompt tokens by -87.9% during prefill, total wall-time savings reach -34.3% because autoregressive output generation and baseline network latency remain constant across turns. See [docs/ROADMAP.md](file:///home/dhanush/projects/edgemem/docs/ROADMAP.md) for full prefill-vs-decode latency analysis, hardware tiering, and ADRs.
 
 ### 3. AST Context Slicer (Flask Repository)
 Tree-sitter symbol extraction, PageRank centrality ranking, and incremental AST outline caching:
@@ -298,6 +300,12 @@ python bench/run_bench.py \
 
 ---
 
+## Architecture & Roadmap
+
+See [docs/ROADMAP.md](file:///home/dhanush/projects/edgemem/docs/ROADMAP.md) for Architecture Decision Records (ADR-01, ADR-02, ADR-03), PRD FR-01 through FR-08 traceability, and hardware tier benchmarks.
+
+---
+
 ## License
 
-Apache-2.0
+MIT License (Copyright (c) 2026 Dhanush Veerla). See [LICENSE](file:///home/dhanush/projects/edgemem/LICENSE) for details.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
 import math
@@ -597,3 +598,192 @@ def _make_test_proxy_app(tmp_path: Path):
 
     app = create_app(cfg)
     return app, None, cfg
+
+
+class _SyntheticMockTransport(httpx.AsyncBaseTransport):
+    def __init__(self, response_content: str = "Acknowledged.") -> None:
+        self.response_content = response_content
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1234567,
+                "model": "test-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": self.response_content,
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                },
+            },
+            headers={"content-type": "application/json"},
+        )
+
+
+def _make_mock_proxy_app(tmp_path: Path, response_content: str = "Acknowledged."):
+    db_file = tmp_path / "test_app_sec_mem.db"
+    tel_dir = tmp_path / "tel_sec"
+    tel_dir.mkdir(parents=True, exist_ok=True)
+    cfg = EdgeMemConfig()
+    cfg.memory.enabled = True
+    cfg.memory.db_path = str(db_file)
+    cfg.telemetry_dir = str(tel_dir)
+    cfg.memory.auto_extract = True
+    cfg.memory.compact_middle_turns = True
+    cfg.memory.compact_threshold_tokens = 0
+    cfg.memory.compact_min_turn_tokens = 0
+    cfg.memory.keep_recent_turns = 2
+
+    transport = _SyntheticMockTransport(response_content=response_content)
+    app = create_app(cfg)
+    orig_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def patched_lifespan(application):
+        async with orig_lifespan(application):
+            old_client = application.state.edgemem_http_client
+            await old_client.aclose()
+            application.state.edgemem_http_client = httpx.AsyncClient(
+                transport=transport,
+                base_url="http://mock-upstream/v1",
+            )
+            yield
+            await application.state.edgemem_http_client.aclose()
+
+    app.router.lifespan_context = patched_lifespan
+    return app, cfg, db_file
+
+
+def test_security_localhost_route_blocks_secrets_from_memory(tmp_path: Path):
+    app, cfg, _ = _make_mock_proxy_app(tmp_path)
+    secret_key = "sk-proj-testsecretsupersecret1234567890"
+    raw_db_pass = "super_secret_db_pass_999"
+    db_url = f"postgres://admin:{raw_db_pass}@localhost:5432/mydb"
+    boilerplate = ("line of domain logic\n" * 50)
+
+    messages = [
+        {"role": "system", "content": "You are a coding assistant."},
+        {
+            "role": "user",
+            "content": f"Database config constraint: must use {db_url} and API_KEY = '{secret_key}'.\n{boilerplate}",
+        },
+        {"role": "assistant", "content": f"Acknowledged database config.\n{boilerplate}"},
+        {"role": "user", "content": f"Please add a healthcheck route.\n{boilerplate}"},
+        {"role": "assistant", "content": f"Healthcheck added.\n{boilerplate}"},
+        {"role": "user", "content": "What is our architecture constraint?"},
+    ]
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": cfg.model, "messages": messages, "stream": False},
+            headers={"x-edgemem-session": "sec_sess_1"},
+        )
+        assert resp.status_code == 200
+
+        store = app.state.edgemem_memory_store
+        facts = store.list_facts("sec_sess_1", limit=100)
+        assert len(facts) >= 1
+        for f in facts:
+            assert secret_key not in f.value
+            assert secret_key not in f.key
+            assert raw_db_pass not in f.value
+            assert raw_db_pass not in f.key
+
+        episodes = store.list_episodes("sec_sess_1", limit=100)
+        assert len(episodes) >= 1
+        for ep in episodes:
+            assert secret_key not in ep.summary
+            assert raw_db_pass not in ep.summary
+
+
+@pytest.mark.anyio
+async def test_security_restored_assistant_secret_never_persisted(tmp_path: Path):
+    app, cfg, _ = _make_mock_proxy_app(tmp_path)
+    store = app.state.edgemem_memory_store
+    restored_key = "sk-live-assistantrestoredsecretkey12345678"
+    restored_db_pass = "cloud_db_restored_pass_888"
+    restored_url = f"postgres://clouduser:{restored_db_pass}@cloud.db:5432/main"
+    boilerplate = ("system operational logic\n" * 50)
+
+    messages = [
+        {"role": "system", "content": "Assistant prompt."},
+        {"role": "user", "content": f"Setup connection.\n{boilerplate}"},
+        {
+            "role": "assistant",
+            "content": f"Restored credentials: must use API_KEY = '{restored_key}' and {restored_url}.\n{boilerplate}",
+        },
+        {"role": "user", "content": "Proceed with deployment."},
+    ]
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": cfg.model, "messages": messages, "stream": False},
+            headers={"x-edgemem-session": "sec_sess_2"},
+        )
+        assert resp.status_code == 200
+
+        store = app.state.edgemem_memory_store
+        facts = store.list_facts("sec_sess_2", limit=100)
+        for f in facts:
+            assert restored_key not in f.value
+            assert restored_key not in f.key
+            assert restored_db_pass not in f.value
+            assert restored_db_pass not in f.key
+
+        episodes = store.list_episodes("sec_sess_2", limit=100)
+        for ep in episodes:
+            assert restored_key not in ep.summary
+            assert restored_db_pass not in ep.summary
+
+        consolidator = MemoryConsolidator(store, cfg)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            [
+                                {
+                                    "op": "CREATE",
+                                    "key": "RESTORED_KEY",
+                                    "value": restored_key,
+                                    "tier": "core",
+                                },
+                                {
+                                    "op": "CREATE",
+                                    "key": "DB_URL",
+                                    "value": restored_url,
+                                    "tier": "core",
+                                },
+                            ]
+                        )
+                    }
+                }
+            ]
+        }
+        with patch("httpx.AsyncClient.post", return_value=mock_resp):
+            cfg.memory.llm_synthesis = True
+            await consolidator.consolidate_with_llm_async()
+
+        global_facts = store.list_facts("global", limit=100)
+        for gf in global_facts:
+            assert restored_key not in gf.value
+            assert restored_key not in gf.key
+            assert restored_db_pass not in gf.value
+            assert restored_db_pass not in gf.key
+

@@ -1,0 +1,83 @@
+# EdgeMem Architecture Roadmap & ADR Traceability
+
+## 1. Architecture Decision Records (ADRs)
+
+### ADR-01: Deterministic 3-Tier SQLite Synthetic Memory vs. Neural Gist Compressor (FR-04 Pivot)
+- **Status:** Approved & Implemented (v1.0.0)
+- **Context:**
+  The original FR-04 specification envisioned a trained recurrent neural gist compressor converting earlier conversation turns into continuous latent vectors stored in `.edgemem.bin`.
+- **Decision:**
+  Pivot from a trained recurrent neural gist compressor to a deterministic 3-tier synthetic memory hierarchy (Core, Episodic, Archival) backed by embedded SQLite WAL mode with BM25 FTS5 retrieval, salience-decay scoring, and background asynchronous consolidation.
+- **Rationale:**
+  1. **Cross-Model Independence:** Neural gist vectors are inherently pinned to the hidden-state geometry and tokenizer of a single specific model checkpoint. They cannot cross model boundaries, survive local-to-cloud escalation, or transfer across model upgrades. Deterministic text-space synthetic memory remains 100% LLM-agnostic.
+  2. **Auditability & Safety:** Synthetic facts and episodes stored as human-readable text can be inspected, searched, edited, or purged via CLI and MCP tools (`edgemem memory`, `edgemem_recall`). Latent vectors are opaque black boxes prone to uninspectable hallucination drift.
+  3. **Zero GPU/Training Overhead:** Training and hosting recurrent neural compressors requires substantial GPU VRAM and specialized execution kernels, directly violating our resource-constrained target hardware budget.
+  4. **Empirical Verification:** The 3-tier synthetic architecture achieved +5.0 pp overall Pass@1 improvement on the standard benchmark suite (`n=20`) and 3x Pass@1 improvement (16.7% -> 50.0%) on the long-context stress suite (`n=6`).
+
+### ADR-02: Embedded SQLite FTS5 & Minimal Tree-Sitter vs. External Frameworks (Phase 0 Spike)
+- **Status:** Approved & Implemented (Phase 0 / v1.0.0)
+- **Context:**
+  Phase 0 explored integrating existing external stacks: Letta/Mem0 for memory management and full `aider-chat` for AST repository mapping.
+- **Decision:**
+  Build custom, zero-external-dependency embedded SQLite memory (`edgemem.memory`) and vendor a minimal Tree-sitter + NetworkX AST repo-mapper (`edgemem.slicer`), rejecting standalone Letta/Mem0 server runtimes and full Aider package dependencies.
+- **Rationale:**
+  1. **Strict RAM Ceiling:** On the PRD T1 target (<= 3.0 GB total system RSS), a local 2-3B model consumes ~2.05 GB RSS, leaving < 950 MB for the proxy, OS caches, and client IDEs. Letta requires Docker/PostgreSQL/embedding services drawing 800–1,200 MB RSS. Custom SQLite draws < 15 MB RSS, keeping the entire EdgeMem proxy under 85 MB RSS.
+  2. **Latency & Longevity:** Letta introduces 2–3 internal LLM round-trips per turn for memory maintenance, which would add 60–120s of delay on CPU hardware and rapidly exhaust free-tier cloud quotas.
+  3. **Decoupled Architecture:** `aider-chat` carries over 100 dependencies (`scipy`, `numpy`, `sounddevice`, `pillow`, etc.) tightly bound to its terminal UI loop. Extracting the core PageRank AST ranking logic directly requires only 5 packages and eliminates ~103 unneeded dependencies.
+
+### ADR-03: Unified Dynamic Context Budgeting Between Router and Controller (Phase 1.1.2)
+- **Status:** Planned (Phase 1.1.2)
+- **Context:**
+  Currently, `HybridRouter` calculates prompt token escalation thresholds using a static configuration (`escalate_token_threshold`), while the runtime context window can be adjusted separately via the `num_ctx` controller.
+- **Decision:**
+  Phase 1.1.2 will dynamically derive `HybridRouter`'s escalation threshold directly from the active `num_ctx` controller, establishing a single source of truth for the context budget.
+- **Rationale:**
+  1. Eliminates configuration drift where prompt compaction threshold and local model context exhaustion cutoffs diverge.
+  2. Ensures that whenever `num_ctx` is dynamically constrained under memory pressure, `HybridRouter` escalates to cloud backends before local KV-cache overflows occur.
+
+---
+
+## 2. Functional Requirements (FR) Traceability Matrix
+
+| Requirement ID | Description | Status | Implementing Module(s) | Verification Evidence |
+|---|---|---|---|---|
+| **FR-01a** | OpenAI-compatible proxy (`/v1`) & Streamable HTTP MCP server (`/mcp`) | Done | `edgemem.proxy.app`, `edgemem.proxy.mcp_server`, `edgemem.proxy.auth` | `tests/test_proxy.py`, `tests/test_security.py` |
+| **FR-01b** | Native Anthropic & Gemini schema adapters | Planned (1.1.x) | `edgemem.proxy.adapters` | Schema mapping specifications in PRD Section 4 |
+| **FR-02** | AST context slicer with PageRank symbol ranking | Done | `edgemem.slicer.repomap`, `edgemem.slicer.pagerank`, `edgemem.slicer.tags` | `tests/test_slicer.py`, Flask 83-file benchmark (99.2% token compression) |
+| **FR-03** | Complexity & hybrid local-to-cloud router | Done | `edgemem.proxy.router` | `tests/test_router.py` |
+| **FR-04** | Tiered memory manager & compaction | Pivoted & Done | `edgemem.memory.store`, `edgemem.proxy.middleware`, `edgemem.memory.consolidator` | `tests/test_synthetic_memory.py`, `tests/test_memory_integration.py` |
+| **FR-05** | Exact fact & constraint retrieval store | Done | `edgemem.memory.store` (SQLite WAL + FTS5 BM25) | `tests/test_synthetic_memory.py` |
+| **FR-06** | Hardware-aware inference tuning & speculative decoding | Planned (1.1.2) | `edgemem.engine.llama_cpp`, `edgemem.engine.controller` | Target baseline probe in `spike/baseline_probe.py` |
+| **FR-07** | Reversible secret & PII redaction gate | Done | `edgemem.privacy.redactor`, `edgemem.privacy.stream_restorer` | `tests/test_privacy.py`, `tests/test_synthetic_memory.py` |
+| **FR-08** | Reproducible benchmark harness & telemetry | Done | `bench/run_bench.py`, `edgemem.proxy.telemetry` | `bench/baselines/`, `tests/test_telemetry.py` |
+
+---
+
+## 3. Metric Precision, Hardware Tiering & Physics of Latency
+
+### Hardware Validation Tiers
+- **PRD Total System Peak RSS Ceiling:** `<= 3.0 GB` (encompassing operating system baseline, local quantized 2–3B LLM, and EdgeMem proxy runtime).
+- **EdgeMem Proxy-Only RSS:** Measured empirically at **79.7 MB – 81.8 MB** (well below the 85.0 MB proxy-specific allocation target). Full system RSS with local Ollama runtime will be validated end-to-end in Phase 1.1.2.
+- **Hardware Tier Definitions:**
+  - **T1 Floor (Target):** Dual-core CPU-only, 8 GB RAM, zero GPU. (Pinned validation using 2-core CPU pinning scheduled for Phase 1.1.2).
+  - **T2 Mid (Empirical Testbed):** Lenovo LOQ `83FQ` (Intel Core i5, 7.7 GB usable RAM, Intel Arc A530M 4 GB VRAM). Reclassified accurately as T2 mid-tier validation.
+  - **T3 High:** Entry discrete GPU (>= 8 GB VRAM) with speculative decoding validation.
+
+### Sample Sizes & Pass@1 Benchmarks
+- **Standard Suite:** `n=20` synthetic coding tasks (10 exact-fact constraints + 10 conversational continuity). Measured: Raw 75.0% (15/20) vs. EdgeMem 80.0% (16/20), delta +5.0 pp.
+- **Stress Suite:** `n=6` multi-turn long-context tasks (~7.2k tokens/task, temperature=0.0). Measured: Raw 16.7% (1/6) vs. EdgeMem 50.0% (3/6), delta 3x improvement. The suite will expand to `n >= 20` tasks prior to v1.1.0 general release.
+
+### Physics of Prompt Reduction vs. Wall-Time Delta
+On the long-context stress benchmark (`n=6`), prompt tokens decreased by **-87.9%** (from 43,099 to 5,195 tokens), whereas total cloud wall-time decreased by **-34.3%** (from 99.24s to 65.16s).
+This delta reflects LLM inference physics:
+1. **Prefill Phase Acceleration:** Middle-turn context compaction slashes prompt evaluation (prefill) latency by eliminating boilerplate tokens before they reach the model attention heads.
+2. **Decode Phase Invariance:** Autoregressive generation (token-by-token decode) consumes the majority of wall-clock time and runs at a fixed tokens/second throughput regardless of prompt brevity.
+3. **Network Baseline:** Base HTTP round-trip latency and cloud provider queuing remain constant across both compressed and uncompressed payloads.
+
+---
+
+## 4. Milestone Schedule
+
+- **v1.0.0 (Current):** Unified proxy, deterministic 3-tier memory, reversible secret redaction, PageRank AST repo map, and MCP server.
+- **v1.1.0 (Upcoming):** Expansion of stress benchmark suite to `n >= 20`, native Gemini adapter, and dynamic context budgeting.
+- **v1.1.2 (Hardware Integration):** Dynamic derivation of router threshold from `num_ctx`, and strict T1 dual-core CPU pinning validation under <= 3.0 GB system RSS.

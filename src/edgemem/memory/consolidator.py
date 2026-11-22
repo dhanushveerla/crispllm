@@ -15,6 +15,7 @@ import httpx
 
 from edgemem.config import EdgeMemConfig
 from edgemem.memory.store import Fact, MemoryStore
+from edgemem.privacy.redactor import sanitize_fact
 
 logger = logging.getLogger("edgemem.memory.consolidator")
 
@@ -331,32 +332,38 @@ class MemoryConsolidator:
                     if not k or not v:
                         continue
                     if action == "CREATE":
-                        self.store.upsert_fact(
-                            session_id="global",
-                            key=k,
-                            value=v,
-                            tier=t,
-                            source="consolidated",
-                        )
-                        created_count += 1
+                        clean_k, clean_v = sanitize_fact(k, v)
+                        if clean_v != "[REDACTED_SECRET]":
+                            self.store.upsert_fact(
+                                session_id="global",
+                                key=clean_k,
+                                value=clean_v,
+                                tier=t,
+                                source="consolidated",
+                            )
+                            created_count += 1
                     elif action == "CORROBORATE":
-                        self.store.upsert_fact(
-                            session_id="global",
-                            key=k,
-                            value=v,
-                            tier=t,
-                            source="consolidated",
-                        )
-                        merged_count += 1
+                        clean_k, clean_v = sanitize_fact(k, v)
+                        if clean_v != "[REDACTED_SECRET]":
+                            self.store.upsert_fact(
+                                session_id="global",
+                                key=clean_k,
+                                value=clean_v,
+                                tier=t,
+                                source="consolidated",
+                            )
+                            merged_count += 1
                     elif action == "SUPERSEDE":
-                        self.store.upsert_fact(
-                            session_id="global",
-                            key=k,
-                            value=v,
-                            tier=t,
-                            source="consolidated",
-                        )
-                        superseded_count += 1
+                        clean_k, clean_v = sanitize_fact(k, v)
+                        if clean_v != "[REDACTED_SECRET]":
+                            self.store.upsert_fact(
+                                session_id="global",
+                                key=clean_k,
+                                value=clean_v,
+                                tier=t,
+                                source="consolidated",
+                            )
+                            superseded_count += 1
 
             det_report = await asyncio.to_thread(
                 self.consolidate_once, dry_run=dry_run, now=ts
