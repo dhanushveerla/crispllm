@@ -218,17 +218,23 @@ class TestPassAtOneCoverage:
 
 class TestStressTasksSuite:
     def test_stress_task_count(self, stress_tasks):
-        assert len(stress_tasks) == 6, f"Expected 6 stress tasks, got {len(stress_tasks)}"
+        assert len(stress_tasks) == 20, f"Expected 20 stress tasks, got {len(stress_tasks)}"
 
-    @pytest.mark.parametrize("idx", range(6))
+    @pytest.mark.parametrize("idx", range(20))
     def test_stress_task_schema(self, stress_tasks, idx):
         task = stress_tasks[idx]
         missing = REQUIRED_KEYS - set(task.keys())
         assert not missing, f"Stress task {idx} missing keys: {missing}"
-        assert task["category"] == "stress_continuity", f"Unexpected category {task['category']!r}"
+        assert task["category"] in {
+            "constraint_retention",
+            "contradiction_update",
+            "noisy_distractor",
+            "cross_turn_synthesis",
+            "stress_continuity",
+        }, f"Unexpected category {task['category']!r}"
         assert len(task["turns"]) >= 6, f"Expected >= 6 turns, got {len(task['turns'])}"
 
-    @pytest.mark.parametrize("idx", range(6))
+    @pytest.mark.parametrize("idx", range(20))
     def test_stress_task_prompt_length(self, stress_tasks, idx):
         task = stress_tasks[idx]
         file_chars = sum(len(c) for c in task["files"].values())
@@ -241,7 +247,7 @@ class TestStressTasksSuite:
             f"Stress task {task['id']!r} prompt too long: {estimated_tokens} tokens (> 8500)"
         )
 
-    @pytest.mark.parametrize("idx", range(6))
+    @pytest.mark.parametrize("idx", range(20))
     def test_stress_reference_solution_passes(self, stress_tasks, idx):
         task = stress_tasks[idx]
         passed, output = _run_test_in_tmpdir(
@@ -253,7 +259,7 @@ class TestStressTasksSuite:
             f"Output:\n{output[-1200:]}"
         )
 
-    @pytest.mark.parametrize("idx", range(6))
+    @pytest.mark.parametrize("idx", range(20))
     def test_stress_empty_solution_fails(self, stress_tasks, idx):
         task = stress_tasks[idx]
         broken_sol = _make_empty_solution(task)

@@ -35,8 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
                   --model qwen2.5-coder:3b --label edgemem-v1 --category continuity
         """),
     )
-    p.add_argument("--base-url", required=True, help="OpenAI-compatible API base URL")
-    p.add_argument("--model", required=True, help="Model name to pass in request body")
+    p.add_argument("--base-url", default="http://localhost:8080/v1", help="OpenAI-compatible API base URL")
+    p.add_argument("--model", default="mock-model", help="Model name to pass in request body")
     p.add_argument("--api-key-env", default="OPENAI_API_KEY", help="Env var name containing API key")
     p.add_argument("--extra-body-json", default="{}", help="JSON string merged into request body")
     p.add_argument("--tasks", "--tasks-file", dest="tasks_file", default=None, help="Path to tasks JSON file")
@@ -56,6 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Use SSE streaming to decompose TTFT/prefill vs. decode latency (default: True).",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Run deterministically offline using reference solutions.",
     )
     p.add_argument(
         "--baseline",
@@ -361,16 +367,17 @@ def build_chat_payload(
 
 def run_task(
     task: dict,
-    base_url: str,
-    model: str,
-    api_key: str,
-    extra_body: dict,
-    timeout_llm: int,
-    timeout_task: int,
+    base_url: str = "http://localhost:8080/v1",
+    model: str = "mock-model",
+    api_key: str = "",
+    extra_body: dict | None = None,
+    timeout_llm: int = 120,
+    timeout_task: int = 10,
     max_retries: int = 4,
     temperature: float = 0.0,
     seed: int | None = None,
     stream: bool = True,
+    dry_run: bool = False,
 ) -> dict:
     task_id = task["id"]
     category = task["category"]
@@ -416,88 +423,105 @@ def run_task(
         final_text: str = ""
         wall_ms: float = 0.0
 
-        try:
-            payload = build_chat_payload(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                seed=seed,
-                extra_body=extra_body,
-                stream=stream,
-            )
-            chat_url = f"{base_url.rstrip('/')}/chat/completions"
-            if stream:
-                stream_res = _http_stream_chat(
-                    chat_url,
-                    payload,
-                    api_key,
-                    timeout_llm,
-                    max_retries=max_retries,
+        if dry_run:
+            wrote_any = False
+            for fname, code in reference_solution.items():
+                dest = tmp / fname
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(code, encoding="utf-8")
+                wrote_any = True
+            prompt_tokens = (len(system_msg) + sum(len(t) for t in turns)) // 4
+            completion_tokens = sum(len(c) for c in reference_solution.values()) // 4
+            wall_ms = 25.0
+            proxy_overhead_ms = 0.5
+            ttft_total_ms = 10.0
+            prefill_ms = 8.0
+            decode_ms = 15.0
+            decode_tok_s = 60.0
+            usage_source = "dry_run"
+        else:
+            try:
+                payload = build_chat_payload(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    seed=seed,
+                    extra_body=extra_body,
+                    stream=stream,
                 )
-                final_text = stream_res["final_text"]
-                prompt_tokens = stream_res["prompt_tokens"]
-                completion_tokens = stream_res["completion_tokens"]
-                wall_ms = stream_res["wall_ms"]
-                proxy_overhead_ms = stream_res["proxy_overhead_ms"]
-                ttft_total_ms = stream_res["ttft_total_ms"]
-                prefill_ms = stream_res["prefill_ms"]
-                decode_ms = stream_res["decode_ms"]
-                decode_tok_s = stream_res["decode_tok_s"]
-                usage_source = stream_res["usage_source"]
-            else:
-                resp, wall_ms, proxy_overhead_ms = _http_post_json(
-                    chat_url,
-                    payload,
-                    api_key,
-                    timeout_llm,
-                    max_retries=max_retries,
-                )
-                final_text = resp["choices"][0]["message"]["content"]
-                usage = resp.get("usage", {})
-                prompt_tokens = usage.get("prompt_tokens", 0)
-                completion_tokens = usage.get("completion_tokens", 0)
-                usage_source = "api_usage" if "completion_tokens" in usage else "none"
-                ttft_total_ms = None
-                prefill_ms = None
-                decode_ms = None
-                decode_tok_s = None
-        except Exception as exc:
-            wall_ms = (time.perf_counter() - t0) * 1000.0
-            return {
-                "task_id": task_id,
-                "category": category,
-                "passed": False,
-                "error": f"LLM call failed: {exc}",
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "ttft_ms": None,
-                "ttft_total_ms": None,
-                "wall_ms": wall_ms,
-                "proxy_overhead_ms": proxy_overhead_ms,
-                "prefill_ms": None,
-                "decode_ms": None,
-                "decode_tok_s": None,
-                "gen_toks_per_s": None,
-                "usage_source": usage_source,
-            }
-
-        code_blocks = extract_all_code_blocks(final_text)
-
-        wrote_any = False
-        for fname, code in code_blocks.items():
-            if fname == "__unnamed__":
-                ref_keys = list(reference_solution.keys())
-                if len(ref_keys) == 1:
-                    fname = ref_keys[0]
+                chat_url = f"{base_url.rstrip('/')}/chat/completions"
+                if stream:
+                    stream_res = _http_stream_chat(
+                        chat_url,
+                        payload,
+                        api_key,
+                        timeout_llm,
+                        max_retries=max_retries,
+                    )
+                    final_text = stream_res["final_text"]
+                    prompt_tokens = stream_res["prompt_tokens"]
+                    completion_tokens = stream_res["completion_tokens"]
+                    wall_ms = stream_res["wall_ms"]
+                    proxy_overhead_ms = stream_res["proxy_overhead_ms"]
+                    ttft_total_ms = stream_res["ttft_total_ms"]
+                    prefill_ms = stream_res["prefill_ms"]
+                    decode_ms = stream_res["decode_ms"]
+                    decode_tok_s = stream_res["decode_tok_s"]
+                    usage_source = stream_res["usage_source"]
                 else:
-                    fname = "solution.py"
-            dest = tmp / fname
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(code, encoding="utf-8")
-            wrote_any = True
+                    resp, wall_ms, proxy_overhead_ms = _http_post_json(
+                        chat_url,
+                        payload,
+                        api_key,
+                        timeout_llm,
+                        max_retries=max_retries,
+                    )
+                    final_text = resp["choices"][0]["message"]["content"]
+                    usage = resp.get("usage", {})
+                    prompt_tokens = usage.get("prompt_tokens", 0)
+                    completion_tokens = usage.get("completion_tokens", 0)
+                    usage_source = "api_usage" if "completion_tokens" in usage else "none"
+                    ttft_total_ms = None
+                    prefill_ms = None
+                    decode_ms = None
+                    decode_tok_s = None
+            except Exception as exc:
+                wall_ms = (time.perf_counter() - t0) * 1000.0
+                return {
+                    "task_id": task_id,
+                    "category": category,
+                    "passed": False,
+                    "error": f"LLM call failed: {exc}",
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "ttft_ms": None,
+                    "ttft_total_ms": None,
+                    "wall_ms": wall_ms,
+                    "proxy_overhead_ms": proxy_overhead_ms,
+                    "prefill_ms": None,
+                    "decode_ms": None,
+                    "decode_tok_s": None,
+                    "gen_toks_per_s": None,
+                    "usage_source": usage_source,
+                }
 
-        if not wrote_any:
-            (tmp / "solution.py").write_text(f"'''\n{final_text}\n'''", encoding="utf-8")
+            code_blocks = extract_all_code_blocks(final_text)
+
+            wrote_any = False
+            for fname, code in code_blocks.items():
+                if fname == "__unnamed__":
+                    ref_keys = list(reference_solution.keys())
+                    if len(ref_keys) == 1:
+                        fname = ref_keys[0]
+                    else:
+                        fname = "solution.py"
+                dest = tmp / fname
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(code, encoding="utf-8")
+                wrote_any = True
+
+            if not wrote_any:
+                (tmp / "solution.py").write_text(f"'''\n{final_text}\n'''", encoding="utf-8")
 
         test_file = tmp / "_edgemem_test_.py"
         test_file.write_text(test_code, encoding="utf-8")
@@ -908,6 +932,11 @@ def build_markdown_report(
         f"| Pass@1 continuity | {p['continuity']:.1%} ({c['continuity_passed']}/{c['continuity_total']}, n={c['continuity_total']}) |"
         if p.get("continuity") is not None
         else "| Pass@1 continuity | - |",
+    ])
+    for cat_name, cat_data in metrics.get("categories", {}).items():
+        if cat_name not in ("exact_fact", "continuity"):
+            lines.append(f"| Pass@1 {cat_name} | {cat_data['formatted']} |")
+    lines.extend([
         f"| Total prompt tokens | {t['total_prompt']:,} |",
         f"| Total completion tokens | {t['total_completion']:,} |",
         f"| Mean prompt tokens | {t['mean_prompt']} |",
@@ -1010,6 +1039,7 @@ def main() -> None:
             temperature=args.temperature,
             seed=args.seed,
             stream=args.stream,
+            dry_run=args.dry_run,
         )
         elapsed = time.perf_counter() - t0
         status_icon = "PASS" if result["passed"] else "FAIL"

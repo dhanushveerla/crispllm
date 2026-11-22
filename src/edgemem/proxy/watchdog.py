@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import threading
 import time
 from typing import Callable
 
 from edgemem.config import ResourcesConfig
 from edgemem.proxy.sysinfo import SystemMemoryInfo, get_system_memory_info
+
+logger = logging.getLogger("edgemem.proxy.watchdog")
 
 
 @dataclass
@@ -82,7 +85,11 @@ class RamPressureWatchdog:
                     sampled_at=now,
                 )
 
-            info = self.probe_fn()
+            try:
+                info = self.probe_fn()
+            except Exception as exc:
+                logger.warning("RamPressureWatchdog probe failed (failing open): %s", exc)
+                info = None
             self._cached_info = info
             self._last_sample_time = now
 

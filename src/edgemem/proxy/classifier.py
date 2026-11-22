@@ -40,6 +40,8 @@ _FAST_KEYWORD_RE = re.compile(
 
 
 def _extract_text_from_message(msg: dict[str, Any]) -> str:
+    if not isinstance(msg, dict):
+        return ""
     content = msg.get("content")
     if isinstance(content, str):
         return content
@@ -62,6 +64,13 @@ class TaskClassifier:
         fast_max_tokens: int = 1200,
         explicit_tier: str | None = None,
     ) -> TaskClassification:
+        if not isinstance(messages, list):
+            return TaskClassification(
+                tier="balanced",
+                confidence=0.5,
+                reasons=("malformed_payload",),
+            )
+
         if explicit_tier:
             val = explicit_tier.strip().lower()
             if val in ("fast", "balanced", "deep"):
@@ -69,7 +78,7 @@ class TaskClassifier:
 
         last_user_text = ""
         for m in reversed(messages):
-            if m.get("role") == "user":
+            if isinstance(m, dict) and m.get("role") == "user":
                 last_user_text = _extract_text_from_message(m)
                 break
 

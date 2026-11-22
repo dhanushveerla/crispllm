@@ -196,7 +196,21 @@ async def stream_with_heartbeat(
 
 def estimate_tokens_from_messages(messages: list[dict]) -> int:
     """Rough token estimate from messages (4 chars ≈ 1 token)."""
-    total_chars = sum(len(json.dumps(m)) for m in messages)
+    if not isinstance(messages, list) or not messages:
+        return 0
+    total_chars = 0
+    for m in messages:
+        try:
+            if isinstance(m, dict):
+                content = m.get("content")
+                if isinstance(content, str):
+                    total_chars += len(content)
+                else:
+                    total_chars += len(json.dumps(m, default=str))
+            else:
+                total_chars += len(str(m))
+        except Exception:
+            total_chars += 10
     return max(1, total_chars // 4)
 
 

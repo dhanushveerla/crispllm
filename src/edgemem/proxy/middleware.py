@@ -58,6 +58,8 @@ def estimate_tokens(text: str) -> int:
 
 def _get_message_text(msg: dict[str, Any]) -> str:
     """Safely extract plain text from a message content field."""
+    if not isinstance(msg, dict):
+        return ""
     content = msg.get("content")
     if isinstance(content, str):
         return content
@@ -153,6 +155,8 @@ class MemoryMiddleware:
         system_text = ""
         user_text = ""
         for msg in messages:
+            if not isinstance(msg, dict):
+                continue
             role = msg.get("role")
             if role == "system" and not system_text:
                 system_text = _get_message_text(msg)
@@ -190,7 +194,9 @@ class MemoryMiddleware:
 
         try:
             session_id = self._derive_session_id(messages, headers)
-            user_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+            user_indices = [
+                i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "user"
+            ]
             if not user_indices:
                 return body, {
                     "facts_extracted": 0,
@@ -220,16 +226,19 @@ class MemoryMiddleware:
                     clean_k, clean_v = sanitize_fact(ef.key, ef.value)
                     if clean_v == "[REDACTED_SECRET]" and ef.kind in ("constant", "note"):
                         continue
-                    self.store.upsert_fact(
-                        session_id=session_id,
-                        key=clean_k,
-                        value=clean_v,
-                        kind=ef.kind,
-                        scope=ef.scope,
-                        source_turn=ef.source_turn,
-                        pinned=ef.pinned,
-                    )
-                    facts_extracted += 1
+                    try:
+                        self.store.upsert_fact(
+                            session_id=session_id,
+                            key=clean_k,
+                            value=clean_v,
+                            kind=ef.kind,
+                            scope=ef.scope,
+                            source_turn=ef.source_turn,
+                            pinned=ef.pinned,
+                        )
+                        facts_extracted += 1
+                    except Exception as exc:
+                        logger.warning("Failed to upsert fact (failing open): %s", exc)
 
             core_facts: list[Fact] = []
             seen_core_keys: set[tuple[str, str]] = set()
@@ -345,18 +354,21 @@ class MemoryMiddleware:
 
                         pair_tokens = estimate_tokens(text) + estimate_tokens(asst_text)
                         if pair_tokens >= self.config.compact_min_turn_tokens:
-                            self.store.add_episode(
-                                session_id=session_id,
-                                role="user",
-                                summary=sanitize_for_memory(text[:300]),
-                                raw_tokens=estimate_tokens(text),
-                            )
-                            self.store.add_episode(
-                                session_id=session_id,
-                                role="assistant",
-                                summary=sanitize_for_memory(asst_text[:300]),
-                                raw_tokens=estimate_tokens(asst_text),
-                            )
+                            try:
+                                self.store.add_episode(
+                                    session_id=session_id,
+                                    role="user",
+                                    summary=sanitize_for_memory(text[:300]),
+                                    raw_tokens=estimate_tokens(text),
+                                )
+                                self.store.add_episode(
+                                    session_id=session_id,
+                                    role="assistant",
+                                    summary=sanitize_for_memory(asst_text[:300]),
+                                    raw_tokens=estimate_tokens(asst_text),
+                                )
+                            except Exception as exc:
+                                logger.warning("Failed to record episode (failing open): %s", exc)
                             new_messages[idx] = {"role": "user", "content": "[Compacted earlier turn]"}
                             new_messages[idx + 1] = {"role": "assistant", "content": "[Compacted earlier turn]"}
                             compacted_turns += 2
@@ -370,12 +382,15 @@ class MemoryMiddleware:
                         and not _has_lexical_overlap(text, last_user_text)
                         and not _has_code_reference(text, last_user_text)
                     ):
-                        self.store.add_episode(
-                            session_id=session_id,
-                            role=role,
-                            summary=sanitize_for_memory(text[:300]),
-                            raw_tokens=turn_tokens,
-                        )
+                        try:
+                            self.store.add_episode(
+                                session_id=session_id,
+                                role=role,
+                                summary=sanitize_for_memory(text[:300]),
+                                raw_tokens=turn_tokens,
+                            )
+                        except Exception as exc:
+                            logger.warning("Failed to record episode (failing open): %s", exc)
                         new_messages[idx] = {"role": role, "content": "[Compacted earlier turn]"}
                         compacted_turns += 1
 
@@ -470,7 +485,10 @@ class MemoryMiddleware:
                             u_msg["content"] = episodic_block
 
                 if injected_facts:
-                    self.store.record_access([f.id for f in injected_facts])
+                    try:
+                        self.store.record_access([f.id for f in injected_facts])
+                    except Exception as exc:
+                        logger.warning("Failed to record fact access: %s", exc)
 
             else:
                 memory_block = ""
@@ -509,7 +527,10 @@ class MemoryMiddleware:
                     if fact_lines:
                         memory_block = header + "\n" + "\n".join(fact_lines)
                         injected_tokens = estimate_tokens(memory_block)
-                        self.store.record_access([f.id for f in injected_facts])
+                        try:
+                            self.store.record_access([f.id for f in injected_facts])
+                        except Exception as exc:
+                            logger.warning("Failed to record fact access: %s", exc)
 
                 if memory_block:
                     first_msg = new_messages[0]

@@ -50,6 +50,8 @@ class PredictionDecision:
 
 
 def _extract_text_from_message(msg: dict[str, Any]) -> str:
+    if not isinstance(msg, dict):
+        return ""
     content = msg.get("content", "")
     if isinstance(content, str):
         return content
@@ -99,105 +101,110 @@ class PredictedOutputsEngine:
         model: str,
         header_mode: str | None = None,
     ) -> PredictionDecision:
-        if header_mode is not None:
-            hm = header_mode.strip().lower()
-            if hm in ("off", "false", "0", "no"):
-                return PredictionDecision(inject=False, reason="header_disabled")
-            forced_enabled = hm in ("auto", "on", "true", "1", "yes")
-        else:
-            forced_enabled = False
-
-        if not target_is_cloud:
-            return PredictionDecision(inject=False, reason="local_target")
-
-        if not forced_enabled and not self.config.predicted_outputs_enabled:
-            return PredictionDecision(inject=False, reason="disabled")
-
-        if self.is_unsupported(base_url, model):
-            return PredictionDecision(inject=False, reason="provider_unsupported_cached")
-
-        if "prediction" in body:
-            return PredictionDecision(inject=False, reason="caller_provided")
-
-        if ("tools" in body and bool(body["tools"])) or ("functions" in body and bool(body["functions"])):
-            return PredictionDecision(inject=False, reason="incompatible_tools")
-
-        if body.get("n", 1) is not None:
-            try:
-                if int(body.get("n", 1)) > 1:
-                    return PredictionDecision(inject=False, reason="incompatible_n")
-            except (ValueError, TypeError):
-                pass
-
-        if bool(body.get("logprobs")) or bool(body.get("top_logprobs")):
-            return PredictionDecision(inject=False, reason="incompatible_logprobs")
-
-        pres_pen = body.get("presence_penalty")
-        freq_pen = body.get("frequency_penalty")
-        if (pres_pen is not None and pres_pen != 0 and pres_pen != 0.0) or (
-            freq_pen is not None and freq_pen != 0 and freq_pen != 0.0
-        ):
-            return PredictionDecision(inject=False, reason="incompatible_penalties")
-
-        if body.get("response_format") is not None:
-            return PredictionDecision(inject=False, reason="incompatible_response_format")
-
-        messages = body.get("messages", [])
-        if not isinstance(messages, list):
-            return PredictionDecision(inject=False, reason="no_user_message")
-
-        user_messages = [m for m in messages if isinstance(m, dict) and m.get("role") == "user"]
-        if not user_messages:
-            return PredictionDecision(inject=False, reason="no_user_message")
-
-        latest_user_msg = user_messages[-1]
-        latest_text = _extract_text_from_message(latest_user_msg)
-
-        text_lower = latest_text.lower()
-        has_edit = any(sig in text_lower for sig in _EDIT_SIGNALS)
-        has_greenfield = any(gf in text_lower for gf in _GREENFIELD_SIGNALS)
-        if not has_edit or (has_greenfield and not has_edit):
-            return PredictionDecision(inject=False, reason="no_edit_intent")
-
-        blocks = _CODE_BLOCK_RE.findall(latest_text)
-        if not blocks and len(user_messages) >= 2:
-            prev_user_text = _extract_text_from_message(user_messages[-2])
-            blocks = _CODE_BLOCK_RE.findall(prev_user_text)
-
-        if not blocks:
-            return PredictionDecision(inject=False, reason="no_code_block")
-
-        valid_blocks: list[str] = []
-        short_found = False
-        long_found = False
-
-        for b in blocks:
-            code = b.strip()
-            char_count = len(code)
-            lines = code.splitlines()
-            line_count = len(lines)
-
-            if char_count < self.config.min_prediction_chars or line_count < self.config.min_prediction_lines:
-                short_found = True
-            elif char_count > self.config.max_prediction_chars:
-                long_found = True
+        if not isinstance(body, dict):
+            return PredictionDecision(inject=False, reason="malformed_payload")
+        try:
+            if header_mode is not None:
+                hm = header_mode.strip().lower()
+                if hm in ("off", "false", "0", "no"):
+                    return PredictionDecision(inject=False, reason="header_disabled")
+                forced_enabled = hm in ("auto", "on", "true", "1", "yes")
             else:
-                valid_blocks.append(code)
+                forced_enabled = False
 
-        if valid_blocks:
-            selected = max(valid_blocks, key=len)
-            return PredictionDecision(
-                inject=True,
-                reason="predicted_outputs",
-                prediction_payload={"type": "content", "content": selected},
-                char_count=len(selected),
-            )
+            if not target_is_cloud:
+                return PredictionDecision(inject=False, reason="local_target")
 
-        if short_found and not long_found:
+            if not forced_enabled and not self.config.predicted_outputs_enabled:
+                return PredictionDecision(inject=False, reason="disabled")
+
+            if self.is_unsupported(base_url, model):
+                return PredictionDecision(inject=False, reason="provider_unsupported_cached")
+
+            if "prediction" in body:
+                return PredictionDecision(inject=False, reason="caller_provided")
+
+            if ("tools" in body and bool(body["tools"])) or ("functions" in body and bool(body["functions"])):
+                return PredictionDecision(inject=False, reason="incompatible_tools")
+
+            if body.get("n", 1) is not None:
+                try:
+                    if int(body.get("n", 1)) > 1:
+                        return PredictionDecision(inject=False, reason="incompatible_n")
+                except (ValueError, TypeError):
+                    pass
+
+            if bool(body.get("logprobs")) or bool(body.get("top_logprobs")):
+                return PredictionDecision(inject=False, reason="incompatible_logprobs")
+
+            pres_pen = body.get("presence_penalty")
+            freq_pen = body.get("frequency_penalty")
+            if (pres_pen is not None and pres_pen != 0 and pres_pen != 0.0) or (
+                freq_pen is not None and freq_pen != 0 and freq_pen != 0.0
+            ):
+                return PredictionDecision(inject=False, reason="incompatible_penalties")
+
+            if body.get("response_format") is not None:
+                return PredictionDecision(inject=False, reason="incompatible_response_format")
+
+            messages = body.get("messages", [])
+            if not isinstance(messages, list):
+                return PredictionDecision(inject=False, reason="no_user_message")
+
+            user_messages = [m for m in messages if isinstance(m, dict) and m.get("role") == "user"]
+            if not user_messages:
+                return PredictionDecision(inject=False, reason="no_user_message")
+
+            latest_user_msg = user_messages[-1]
+            latest_text = _extract_text_from_message(latest_user_msg)
+
+            text_lower = latest_text.lower()
+            has_edit = any(sig in text_lower for sig in _EDIT_SIGNALS)
+            has_greenfield = any(gf in text_lower for gf in _GREENFIELD_SIGNALS)
+            if not has_edit or (has_greenfield and not has_edit):
+                return PredictionDecision(inject=False, reason="no_edit_intent")
+
+            blocks = _CODE_BLOCK_RE.findall(latest_text)
+            if not blocks and len(user_messages) >= 2:
+                prev_user_text = _extract_text_from_message(user_messages[-2])
+                blocks = _CODE_BLOCK_RE.findall(prev_user_text)
+
+            if not blocks:
+                return PredictionDecision(inject=False, reason="no_code_block")
+
+            valid_blocks: list[str] = []
+            short_found = False
+            long_found = False
+
+            for b in blocks:
+                code = b.strip()
+                char_count = len(code)
+                lines = code.splitlines()
+                line_count = len(lines)
+
+                if char_count < self.config.min_prediction_chars or line_count < self.config.min_prediction_lines:
+                    short_found = True
+                elif char_count > self.config.max_prediction_chars:
+                    long_found = True
+                else:
+                    valid_blocks.append(code)
+
+            if valid_blocks:
+                selected = max(valid_blocks, key=len)
+                return PredictionDecision(
+                    inject=True,
+                    reason="predicted_outputs",
+                    prediction_payload={"type": "content", "content": selected},
+                    char_count=len(selected),
+                )
+
+            if short_found and not long_found:
+                return PredictionDecision(inject=False, reason="code_too_short")
+            if long_found and not short_found:
+                return PredictionDecision(inject=False, reason="code_too_long")
             return PredictionDecision(inject=False, reason="code_too_short")
-        if long_found and not short_found:
-            return PredictionDecision(inject=False, reason="code_too_long")
-        return PredictionDecision(inject=False, reason="code_too_short")
+        except Exception:
+            return PredictionDecision(inject=False, reason="malformed_payload")
 
 
 class SpeculativeStats:
@@ -226,25 +233,28 @@ class SpeculativeStats:
     def record_usage_payload(self, payload: dict[str, Any], is_cloud: bool = True) -> None:
         if not isinstance(payload, dict):
             return
-        usage = payload.get("usage")
-        timings = payload.get("timings")
-        with self._lock:
-            if isinstance(usage, dict):
-                details = usage.get("completion_tokens_details")
-                if isinstance(details, dict):
-                    acc = details.get("accepted_prediction_tokens", 0)
-                    rej = details.get("rejected_prediction_tokens", 0)
-                    if isinstance(acc, (int, float)):
-                        self.cloud_accepted_tokens += int(acc)
-                    if isinstance(rej, (int, float)):
-                        self.cloud_rejected_tokens += int(rej)
-            if isinstance(timings, dict):
-                draft_n = timings.get("draft_n", 0)
-                draft_acc = timings.get("draft_n_accepted", 0)
-                if isinstance(draft_n, (int, float)):
-                    self.local_draft_tokens += int(draft_n)
-                if isinstance(draft_acc, (int, float)):
-                    self.local_accepted_tokens += int(draft_acc)
+        try:
+            usage = payload.get("usage")
+            timings = payload.get("timings")
+            with self._lock:
+                if isinstance(usage, dict):
+                    details = usage.get("completion_tokens_details")
+                    if isinstance(details, dict):
+                        acc = details.get("accepted_prediction_tokens", 0)
+                        rej = details.get("rejected_prediction_tokens", 0)
+                        if isinstance(acc, (int, float)) and not isinstance(acc, bool) and acc >= 0:
+                            self.cloud_accepted_tokens += int(acc)
+                        if isinstance(rej, (int, float)) and not isinstance(rej, bool) and rej >= 0:
+                            self.cloud_rejected_tokens += int(rej)
+                if isinstance(timings, dict):
+                    draft_n = timings.get("draft_n", 0)
+                    draft_acc = timings.get("draft_n_accepted", 0)
+                    if isinstance(draft_n, (int, float)) and not isinstance(draft_n, bool) and draft_n >= 0:
+                        self.local_draft_tokens += int(draft_n)
+                    if isinstance(draft_acc, (int, float)) and not isinstance(draft_acc, bool) and draft_acc >= 0:
+                        self.local_accepted_tokens += int(draft_acc)
+        except Exception:
+            pass
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:

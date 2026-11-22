@@ -547,7 +547,19 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         pred_engine: PredictedOutputsEngine = request.app.state.edgemem_pred_engine
         spec_stats: SpeculativeStats = request.app.state.edgemem_spec_stats
 
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(
+                {"error": {"message": "Malformed JSON body", "type": "invalid_request_error"}},
+                status_code=400,
+            )
+
+        if not isinstance(body, dict):
+            return JSONResponse(
+                {"error": {"message": "Malformed request body: expected JSON object", "type": "invalid_request_error"}},
+                status_code=400,
+            )
         is_stream = body.get("stream", False)
 
         est_tokens_raw = estimate_tokens_from_messages(body.get("messages", []))

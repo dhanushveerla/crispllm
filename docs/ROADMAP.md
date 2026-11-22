@@ -64,7 +64,7 @@
   - **T2 Mid (Empirical Testbed):** Lenovo LOQ `83FQ` (Intel Core i5, 7.7 GB usable RAM, Intel Arc A530M 4 GB VRAM). Reclassified accurately as T2 mid-tier validation.
   - **T3 High:** Entry discrete GPU (>= 8 GB VRAM) with speculative decoding validation.
 
-### Lenovo LOQ Benchmark Measurements (Phase 1.1.2 & 1.1.3)
+### Lenovo LOQ Benchmark Measurements (Phase 1.1.2, 1.1.3 & 1.1.4)
 Measurements conducted on Windows 11 Home, Lenovo LOQ `83FQ` (Intel Core i5-12450HX, 7.7 GB usable RAM, Intel Arc A530M 4 GB VRAM):
 - **T1-Bloated (Unbudgeted Baseline):** Unconstrained Ollama (`num_ctx=8192` default KV cache) with `qwen2.5-coder:1.5b` reached Peak System RSS of **4.18 GB** (~54% of physical RAM), breaching the <= 3.0 GB constraint during multi-turn generation.
 - **T1-Budgeted (ContextBudgeter + Watchdog):** Dynamic context bucketing (`ctx_buckets=[2048, 4096, 8192]`) and watchdog-driven context capping reduced Peak System RSS to **2.74 GB** (well within the <= 3.0 GB ceiling). EdgeMem proxy RSS held steady at **80.4 MB**.
@@ -74,10 +74,14 @@ Measurements conducted on Windows 11 Home, Lenovo LOQ `83FQ` (Intel Core i5-1245
   - **T1-CPU:** Latency reduced from **2441.0 ms -> 800.2 ms** (a **3.05x speedup / -67.2% reduction**), with cached tokens increasing from `139 -> 814` tokens.
   - **T2-Vulkan (Arc A530M):** Latency reduced from **2469.5 ms -> 773.4 ms** (a **3.19x speedup / -68.7% reduction**), with cached tokens increasing from `139 -> 812` tokens and `3/3` prefix cache hits.
   - **AST Symbol Slicing (`slice_symbol`):** Warm execution latency of **47 ms** on the EdgeMem repository with **99.7% token compression** relative to full repository dump.
+- **Phase 1.1.4 Speculative Decoding Benchmarks:**
+  Measurements conducted with `Qwen2.5-Coder-3B Q4_K_M`, `n=3` deterministic code-edit tasks, `temperature=0.0`, `max_tokens=512`:
+  - **T1-CPU (2-Thread, -c 2048):** Baseline `11.64 tok/s` (`36,670.2 ms` avg wall) vs `ngram-simple` `35.71 tok/s` (**3.07x speedup**, `13,234.0 ms` wall, **-63.9%**, `1,015/1,202` = `84.4%` draft acceptance, `0 MB` extra RAM) and `ngram-mod` `34.64 tok/s` (**2.98x speedup**, `13,295.3 ms` wall, **-63.7%**, `982/1,152` = `85.2%` acceptance, `16 MB` extra RAM).
+  - **T2-Vulkan (Arc A530M, -c 4096):** Baseline `29.02 tok/s` (`15,342.7 ms` avg wall) vs `ngram-simple` `82.52 tok/s` (**2.84x speedup**, `6,264.5 ms` wall, **-59.2%**, `1,001/1,188` = `84.3%` draft acceptance, `0 MB` extra RAM) and `ngram-mod` `77.30 tok/s` (**2.66x speedup**, `6,574.7 ms` wall, **-57.1%**, `963/1,133` = `85.0%` acceptance, `16 MB` extra RAM).
 
 ### Sample Sizes & Pass@1 Benchmarks
 - **Standard Suite:** `n=20` synthetic coding tasks (10 exact-fact constraints + 10 conversational continuity). Measured: Raw 75.0% (15/20) vs. EdgeMem 80.0% (16/20), delta +5.0 pp.
-- **Stress Suite:** `n=6` multi-turn long-context tasks (~7.2k tokens/task, temperature=0.0). Measured: Raw 16.7% (1/6) vs. EdgeMem 50.0% (3/6), delta 3x improvement. The suite will expand to `n >= 20` tasks prior to v1.1.0 general release.
+- **Stress Suite:** Expanded from `n=6` to `n=20` multi-turn long-context engineering tasks across 4 balanced categories (`constraint_retention`, `contradiction_update`, `noisy_distractor`, `cross_turn_synthesis`; 5 tasks each, ~7.2k tokens/task). Deterministic offline validation verifies all reference solutions pass 100% and empty solutions fail 100%. Initial `n=6` cloud measurements: Raw 16.7% (1/6) vs. EdgeMem 50.0% (3/6), delta 3x improvement. Full `n=20` cloud benchmark execution scheduled.
 
 ### Physics of Prompt Reduction vs. Wall-Time Delta
 On the long-context stress benchmark (`n=6`), prompt tokens decreased by **-87.9%** (from 43,099 to 5,195 tokens), whereas total cloud wall-time decreased by **-34.3%** (from 99.24s to 65.16s).
@@ -102,3 +106,8 @@ This delta reflects LLM inference physics:
   - **Fail-Open Circuit Breaker:** Automatic retry on HTTP 400/422 with stripped prediction and 1800s TTL provider caching.
   - **llama-server Speculative Presets:** Exact llama.cpp b12631+ CLI support for `ngram-simple`, `ngram-mod`, `draft`, and `hybrid` with automated RAM-pressure safety guards and OS-safe shell command generation (`edgemem llama-cmd`).
   - **Speculative Acceptance Telemetry:** Tracking cloud and local speculative acceptance in `/health` and `edgemem status`. Complete.
+- **v1.1.5 (Stress Benchmark Expansion & Hardening Audit):**
+  - **Part A:**
+    - Recorded verified Phase 1.1.4 Lenovo LOQ speculative decoding benchmarks (3.07x on T1-CPU, 2.84x on T2-Vulkan).
+    - Expanded long-context stress suite from `n=6` to `n=20` deterministic tasks across 4 balanced categories (`constraint_retention`, `contradiction_update`, `noisy_distractor`, `cross_turn_synthesis`), with `--limit`, `--dry-run`, and per-category sample-size reporting.
+    - End-to-end fail-open hardening audit on `MemoryMiddleware`, `RamPressureWatchdog`, `TaskClassifier`, `PredictedOutputsEngine`, and background workers. Complete.

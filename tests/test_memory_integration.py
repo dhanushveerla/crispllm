@@ -634,7 +634,7 @@ def test_short_conversation_default_config_skips_compaction(tmp_path: Path) -> N
 
 
 def test_stress_tasks_compaction_net_token_reduction() -> None:
-    """Fast unit test running MemoryMiddleware directly on all 6 stress tasks."""
+    """Fast unit test running MemoryMiddleware directly on all 20 stress tasks."""
     from edgemem.memory.store import MemoryStore
     from edgemem.proxy.middleware import MemoryMiddleware, _get_message_text, estimate_tokens
 
@@ -644,7 +644,7 @@ def test_stress_tasks_compaction_net_token_reduction() -> None:
     with open(stress_tasks_file, encoding="utf-8") as f:
         tasks = json.load(f)
 
-    assert len(tasks) == 6
+    assert len(tasks) == 20
 
     for task in tasks:
         store = MemoryStore(":memory:")
