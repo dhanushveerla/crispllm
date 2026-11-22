@@ -381,69 +381,157 @@ class MemoryMiddleware:
 
                     idx += 1
 
-            memory_block = ""
-            injected_tokens = 0
+            new_body = dict(body)
             injected_facts: list[Fact] = []
+            injected_tokens = 0
 
-            if core_facts or episodic_facts:
-                header = (
-                    "[EdgeMem Active Memory]\n"
+            if self.config.prefix_stable_assembly:
+                sys_indices = [i for i, m in enumerate(new_messages) if m.get("role") == "system"]
+                if len(sys_indices) > 1:
+                    combined_sys_parts = []
+                    for si in sys_indices:
+                        txt = _get_message_text(new_messages[si])
+                        if txt:
+                            combined_sys_parts.append(txt)
+                    for si in reversed(sys_indices[1:]):
+                        new_messages.pop(si)
+                    new_messages[0] = {"role": "system", "content": "\n\n".join(combined_sys_parts)}
+                elif len(sys_indices) == 0:
+                    new_messages.insert(0, {"role": "system", "content": ""})
+
+                core_lines: list[str] = []
+                seen_vals: set[str] = set()
+                core_header = (
+                    "--- EdgeMem Core Memory ---\n"
                     "Earlier-turn constraints & facts (follow these unless the latest user message "
                     "explicitly specifies an exception or return behavior):"
                 )
+                sorted_core = sorted(core_facts, key=lambda f: f.id)
 
-                seen_vals: set[str] = set()
-                fact_lines: list[str] = []
-
-                for f in core_facts:
+                for f in sorted_core:
                     norm = _normalize_fact_value(f.value)
                     if norm in seen_vals:
                         continue
-                    test_lines = fact_lines + [_format_fact_line(f)]
-                    test_block = header + "\n" + "\n".join(test_lines)
+                    test_lines = core_lines + [_format_fact_line(f)]
+                    test_block = core_header + "\n" + "\n".join(test_lines)
                     if estimate_tokens(test_block) <= self.config.max_injected_tokens:
                         seen_vals.add(norm)
-                        fact_lines.append(_format_fact_line(f))
+                        core_lines.append(_format_fact_line(f))
                         injected_facts.append(f)
+
+                core_block = ""
+                if core_lines:
+                    core_block = core_header + "\n" + "\n".join(core_lines)
+                    core_tokens = estimate_tokens(core_block)
+                    injected_tokens += core_tokens
+                    first_msg = new_messages[0]
+                    first_content = first_msg.get("content")
+                    if isinstance(first_content, str):
+                        first_msg["content"] = f"{first_content}\n\n{core_block}".strip()
+                    elif isinstance(first_content, list):
+                        content_list = list(first_content)
+                        content_list.append({"type": "text", "text": f"\n\n{core_block}"})
+                        first_msg["content"] = content_list
+                    else:
+                        first_msg["content"] = core_block
+
+                episodic_lines: list[str] = []
+                ep_header = "<edgemem_context>"
+                ep_footer = "</edgemem_context>"
+                remaining_budget = max(0, self.config.max_injected_tokens - injected_tokens)
 
                 for f in episodic_facts:
                     norm = _normalize_fact_value(f.value)
                     if norm in seen_vals:
                         continue
-                    test_lines = fact_lines + [_format_fact_line(f)]
-                    test_block = header + "\n" + "\n".join(test_lines)
-                    if estimate_tokens(test_block) <= self.config.max_injected_tokens:
+                    test_lines = episodic_lines + [_format_fact_line(f)]
+                    test_block = ep_header + "\n" + "\n".join(test_lines) + "\n" + ep_footer
+                    if estimate_tokens(test_block) <= remaining_budget:
                         seen_vals.add(norm)
-                        fact_lines.append(_format_fact_line(f))
+                        episodic_lines.append(_format_fact_line(f))
                         injected_facts.append(f)
 
-                if fact_lines:
-                    memory_block = header + "\n" + "\n".join(fact_lines)
-                    injected_tokens = estimate_tokens(memory_block)
+                episodic_block = ""
+                if episodic_lines:
+                    episodic_block = ep_header + "\n" + "\n".join(episodic_lines) + "\n" + ep_footer
+                    injected_tokens += estimate_tokens(episodic_block)
+                    curr_user_indices = [i for i, m in enumerate(new_messages) if m.get("role") == "user"]
+                    if curr_user_indices:
+                        u_idx = curr_user_indices[-1]
+                        u_msg = new_messages[u_idx]
+                        u_content = u_msg.get("content")
+                        if isinstance(u_content, str):
+                            u_msg["content"] = f"{u_content}\n\n{episodic_block}".strip()
+                        elif isinstance(u_content, list):
+                            u_list = list(u_content)
+                            u_list.append({"type": "text", "text": f"\n\n{episodic_block}"})
+                            u_msg["content"] = u_list
+                        else:
+                            u_msg["content"] = episodic_block
+
+                if injected_facts:
                     self.store.record_access([f.id for f in injected_facts])
 
-            if not memory_block and compacted_turns == 0:
+            else:
+                memory_block = ""
+                if core_facts or episodic_facts:
+                    header = (
+                        "[EdgeMem Active Memory]\n"
+                        "Earlier-turn constraints & facts (follow these unless the latest user message "
+                        "explicitly specifies an exception or return behavior):"
+                    )
+
+                    seen_vals = set()
+                    fact_lines: list[str] = []
+
+                    for f in core_facts:
+                        norm = _normalize_fact_value(f.value)
+                        if norm in seen_vals:
+                            continue
+                        test_lines = fact_lines + [_format_fact_line(f)]
+                        test_block = header + "\n" + "\n".join(test_lines)
+                        if estimate_tokens(test_block) <= self.config.max_injected_tokens:
+                            seen_vals.add(norm)
+                            fact_lines.append(_format_fact_line(f))
+                            injected_facts.append(f)
+
+                    for f in episodic_facts:
+                        norm = _normalize_fact_value(f.value)
+                        if norm in seen_vals:
+                            continue
+                        test_lines = fact_lines + [_format_fact_line(f)]
+                        test_block = header + "\n" + "\n".join(test_lines)
+                        if estimate_tokens(test_block) <= self.config.max_injected_tokens:
+                            seen_vals.add(norm)
+                            fact_lines.append(_format_fact_line(f))
+                            injected_facts.append(f)
+
+                    if fact_lines:
+                        memory_block = header + "\n" + "\n".join(fact_lines)
+                        injected_tokens = estimate_tokens(memory_block)
+                        self.store.record_access([f.id for f in injected_facts])
+
+                if memory_block:
+                    first_msg = new_messages[0]
+                    if first_msg.get("role") == "system":
+                        first_content = first_msg.get("content")
+                        if isinstance(first_content, str):
+                            first_msg["content"] = f"{first_content}\n\n{memory_block}"
+                        elif isinstance(first_content, list):
+                            content_list = list(first_content)
+                            content_list.append({"type": "text", "text": f"\n\n{memory_block}"})
+                            first_msg["content"] = content_list
+                        else:
+                            new_messages.insert(0, {"role": "system", "content": memory_block})
+                    else:
+                        new_messages.insert(0, {"role": "system", "content": memory_block})
+
+            if injected_tokens == 0 and compacted_turns == 0:
                 return body, {
                     "facts_extracted": facts_extracted,
                     "memory_injected_tokens": 0,
                     "compacted_turns": 0,
                 }
-
-            new_body = dict(body)
-            if memory_block:
-                first_msg = new_messages[0]
-                if first_msg.get("role") == "system":
-                    first_content = first_msg.get("content")
-                    if isinstance(first_content, str):
-                        first_msg["content"] = f"{first_content}\n\n{memory_block}"
-                    elif isinstance(first_content, list):
-                        content_list = list(first_content)
-                        content_list.append({"type": "text", "text": f"\n\n{memory_block}"})
-                        first_msg["content"] = content_list
-                    else:
-                        new_messages.insert(0, {"role": "system", "content": memory_block})
-                else:
-                    new_messages.insert(0, {"role": "system", "content": memory_block})
 
             new_body["messages"] = new_messages
             return new_body, {

@@ -210,6 +210,12 @@ def status(config_path: Path | None) -> None:
             max_c = res.get("effective_max_ctx", "N/A")
             esc_t = res.get("effective_escalate_tokens", "N/A")
             click.echo(f"Context Budget: backend={backend}, max_ctx={max_c}, escalate_at={esc_t} tok")
+        if "task_tiers" in data and isinstance(data["task_tiers"], dict):
+            tt = data["task_tiers"]
+            click.echo(f"Task Tiers: fast={tt.get('fast', 0)}, balanced={tt.get('balanced', 0)}, deep={tt.get('deep', 0)}")
+        if "prefix_cache" in data and isinstance(data["prefix_cache"], dict):
+            pc = data["prefix_cache"]
+            click.echo(f"Prefix Cache: hits={pc.get('hits', 0)}, misses={pc.get('misses', 0)}, hit_rate={pc.get('hit_rate_pct', 0.0):.1f}%")
     except httpx.ConnectError:
         click.echo(f"EdgeMem not running at {url}", err=True)
         sys.exit(1)
@@ -259,6 +265,8 @@ def unload(model: str | None, config_path: Path | None) -> None:
               help="Natural language query to boost relevant definitions.")
 @click.option("--focus", "focus_files", multiple=True, metavar="FILE",
               help="Relative paths to focus files (may be repeated).")
+@click.option("--symbol", default=None,
+              help="Target symbol name or qualified name for 1-hop AST call-graph slice.")
 @click.option("--model", default="cl100k_base", show_default=True,
               help="tiktoken encoding for token counting.")
 def slice(
@@ -266,6 +274,7 @@ def slice(
     tokens: int,
     query: str,
     focus_files: tuple[str, ...],
+    symbol: str | None,
     model: str,
 ) -> None:
     """Slice a repository into a compact, ranked AST repo map.
@@ -284,6 +293,19 @@ def slice(
 
     rm = RepoMap(repo_path=path, max_tokens=tokens, model_name=model)
     try:
+        if symbol:
+            res = rm.slice_symbol(symbol=symbol, token_budget=tokens)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            click.echo(res.content)
+            click.echo(
+                f"\n[EdgeMem slice-symbol] symbol='{symbol}' found={res.found} "
+                f"file={res.target_file} callees={res.callee_count} callers={res.caller_count} "
+                f"sliced={res.sliced_tokens:,} tok raw={res.raw_tokens:,} tok fallback={res.fallback_used} "
+                f"latency={elapsed_ms:.0f}ms",
+                err=True,
+            )
+            return
+
         raw_tokens = rm.raw_token_count()
         repo_map = rm.get_repo_map(
             focus_files=list(focus_files) or None,

@@ -282,12 +282,9 @@ def test_middleware_two_phase_injection_and_decay_ranking(tmp_path: Path):
             processed, tel = middleware.process_request(req_body, {"x-edgemem-session": "s1"})
 
         injected_content = processed["messages"][0]["content"]
+        user_content = processed["messages"][1]["content"] if len(processed["messages"]) > 1 else ""
         assert "core strict constraint" in injected_content
-        assert "frequent episodic memory item" in injected_content
-
-        core_pos = injected_content.find("core strict constraint")
-        frequent_pos = injected_content.find("frequent episodic memory item")
-        assert core_pos < frequent_pos
+        assert "frequent episodic memory item" in (injected_content + user_content)
 
         accessed_fact = store.search_facts("frequent", session_id="s1")[0]
         assert accessed_fact.access_count == 11

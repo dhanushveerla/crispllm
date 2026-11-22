@@ -72,6 +72,11 @@ consolidation_every_n_turns = 8
 # Enable optional async LLM synthesis for episodic episodes into architectural facts.
 llm_synthesis = false
 
+# Enable prefix-cache-stable prompt assembly. Merges system messages and places
+# byte-stable Core facts in messages[0] while attaching turn-specific Episodic facts
+# to the latest user message, maximizing KV-cache prefix hits in local runtimes.
+prefix_stable_assembly = true
+
 # Path to SQLite database file. If omitted, defaults to ~/.local/share/edgemem/memory.db
 # db_path = "memory.db"
 
@@ -107,6 +112,18 @@ escalate_on_local_error = true
 
 # Timeout in seconds before considering a local request timed out.
 local_timeout_s = 30.0
+
+# Enable zero-LLM heuristic task-tier expert routing (fast / balanced / deep).
+task_routing_enabled = false
+
+# Optional faster local model identifier for 'fast' tier requests.
+# fast_model = "qwen2.5-coder:1.5b"
+
+# Maximum prompt token estimate for candidate 'fast' tier tasks.
+fast_max_tokens = 1200
+
+# Proactively escalate complex 'deep' tier tasks to cloud when cloud is enabled.
+escalate_deep_tasks = true
 
 [privacy]
 # Enable zero-dependency secret and PII redaction.
@@ -193,3 +210,6 @@ idle_unload_enabled = true
 
 # Inactivity duration in seconds before triggering local model unload (keep_alive: 0).
 idle_unload_s = 300.0
+
+# Inject cache_prompt=true for llama_server backends to persist prefix KV state.
+llama_cache_prompt = true

@@ -20,5 +20,15 @@ from __future__ import annotations
 from edgemem.slicer.repomap import RepoMap
 from edgemem.slicer.tags import Tag, extract_tags
 from edgemem.slicer.cache import OutlineCache, TagCache
+from edgemem.slicer.symbols import SymbolDef, SymbolSliceResult, extract_symbols
 
-__all__ = ["RepoMap", "Tag", "extract_tags", "TagCache", "OutlineCache"]
+__all__ = [
+    "RepoMap",
+    "Tag",
+    "extract_tags",
+    "TagCache",
+    "OutlineCache",
+    "SymbolDef",
+    "SymbolSliceResult",
+    "extract_symbols",
+]

@@ -38,6 +38,7 @@ from edgemem.slicer.pagerank import (
     is_test_file,
     personalise_ranks,
 )
+from edgemem.slicer.symbols import SymbolDef, SymbolSliceResult, extract_symbols
 from edgemem.slicer.tags import Tag, extract_tags, scan_repo_files
 
 logger = logging.getLogger("edgemem.slicer.repomap")
@@ -186,6 +187,7 @@ class RepoMap:
         self.outline_cache = outline_cache or self._cache.outline_cache
         self._enc: tiktoken.Encoding | None = None
         self._cached_raw_tokens: int | None = None
+        self._symbol_cache: dict[str, tuple[int, int, list[SymbolDef]]] = {}
 
 
     def get_repo_map(
@@ -459,6 +461,163 @@ class RepoMap:
 
         self._cached_raw_tokens = total
         return total
+
+    def scan_symbols(self) -> list[SymbolDef]:
+        all_files = scan_repo_files(self.repo_path)
+        all_symbols: list[SymbolDef] = []
+        for fpath in all_files:
+            try:
+                rel = fpath.relative_to(self.repo_path).as_posix()
+            except ValueError:
+                rel = fpath.as_posix()
+            try:
+                st = fpath.stat()
+                mtime_ns = st.st_mtime_ns
+                size_b = st.st_size
+            except OSError:
+                continue
+
+            cached = self._symbol_cache.get(rel)
+            if cached is not None and cached[0] == mtime_ns and cached[1] == size_b:
+                all_symbols.extend(cached[2])
+            else:
+                try:
+                    content = fpath.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    content = ""
+                file_symbols = extract_symbols(fpath, rel, content=content)
+                self._symbol_cache[rel] = (mtime_ns, size_b, file_symbols)
+                all_symbols.extend(file_symbols)
+        return all_symbols
+
+    def slice_symbol(
+        self,
+        symbol: str,
+        token_budget: int = 800,
+        include_callers: bool = True,
+        include_callees: bool = True,
+    ) -> SymbolSliceResult:
+        all_symbols = self.scan_symbols()
+
+        target: SymbolDef | None = None
+        for s in all_symbols:
+            if s.qualified_name == symbol:
+                target = s
+                break
+
+        if target is None:
+            for s in all_symbols:
+                if s.name == symbol:
+                    target = s
+                    break
+
+        if target is None:
+            sym_lower = symbol.lower()
+            for s in all_symbols:
+                if s.name.lower() == sym_lower or s.qualified_name.lower() == sym_lower:
+                    target = s
+                    break
+
+        raw_toks = self.raw_token_count()
+
+        if target is None:
+            fallback_content = self.get_repo_map(query=symbol, max_tokens=token_budget)
+            return SymbolSliceResult(
+                symbol=symbol,
+                found=False,
+                target_file=None,
+                callee_count=0,
+                caller_count=0,
+                sliced_tokens=self._count(fallback_content),
+                raw_tokens=raw_toks,
+                content=fallback_content,
+                fallback_used=True,
+            )
+
+        callees: list[SymbolDef] = []
+        seen_callee_keys: set[str] = set()
+        for s in all_symbols:
+            if s.qualified_name == target.qualified_name and s.file_path == target.file_path:
+                continue
+            if s.name in target.references or s.qualified_name in target.references:
+                k = f"{s.file_path}:{s.qualified_name}"
+                if k not in seen_callee_keys:
+                    seen_callee_keys.add(k)
+                    callees.append(s)
+
+        callers: list[SymbolDef] = []
+        seen_caller_keys: set[str] = set()
+        for s in all_symbols:
+            if s.qualified_name == target.qualified_name and s.file_path == target.file_path:
+                continue
+            if target.name in s.references or target.qualified_name in s.references:
+                k = f"{s.file_path}:{s.qualified_name}"
+                if k not in seen_caller_keys:
+                    seen_caller_keys.add(k)
+                    callers.append(s)
+
+        target_budget = max(50, int(token_budget * 0.55))
+        callee_budget = int(token_budget * 0.25)
+        caller_budget = max(0, token_budget - target_budget - callee_budget)
+
+        target_header = f"# Symbol: {target.qualified_name} ({target.file_path}:{target.start_line}-{target.end_line})"
+        target_body = target.body.strip()
+        full_target_block = f"{target_header}\n{target_body}"
+        if self._count(full_target_block) > target_budget:
+            avail_body = max(20, target_budget - self._count(target_header) - 2)
+            target_body = self._truncate_to_budget(target_body, avail_body)
+            full_target_block = f"{target_header}\n{target_body}"
+
+        used_target_toks = self._count(full_target_block)
+        effective_callee_budget = callee_budget + max(0, target_budget - used_target_toks)
+
+        callee_block = ""
+        if include_callees and callees:
+            lines = [f"# 1-Hop Callees ({len(callees)}):"]
+            for c in callees:
+                entry = f"{c.file_path}:\n  {c.signature}"
+                test_str = "\n".join(lines + [entry])
+                if self._count(test_str) > effective_callee_budget:
+                    break
+                lines.append(entry)
+            if len(lines) > 1:
+                callee_block = "\n".join(lines)
+
+        used_callee_toks = self._count(callee_block) if callee_block else 0
+        effective_caller_budget = caller_budget + max(0, effective_callee_budget - used_callee_toks)
+
+        caller_block = ""
+        if include_callers and callers:
+            lines = [f"# 1-Hop Callers ({len(callers)}):"]
+            for c in callers:
+                entry = f"{c.file_path}:\n  {c.signature}"
+                test_str = "\n".join(lines + [entry])
+                if self._count(test_str) > effective_caller_budget:
+                    break
+                lines.append(entry)
+            if len(lines) > 1:
+                caller_block = "\n".join(lines)
+
+        sections = [full_target_block]
+        if callee_block:
+            sections.append(callee_block)
+        if caller_block:
+            sections.append(caller_block)
+
+        final_content = "\n\n".join(sections).strip()
+        sliced_tokens = self._count(final_content)
+
+        return SymbolSliceResult(
+            symbol=symbol,
+            found=True,
+            target_file=target.file_path,
+            callee_count=len(callees),
+            caller_count=len(callers),
+            sliced_tokens=sliced_tokens,
+            raw_tokens=raw_toks,
+            content=final_content,
+            fallback_used=False,
+        )
 
     def close(self) -> None:
         if hasattr(self, "_cache") and self._cache is not None:

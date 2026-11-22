@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 import copy
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 import threading
@@ -26,7 +28,7 @@ from edgemem.privacy.stream_restorer import StreamRestorer
 from edgemem.proxy.auth import EdgeMemAuthMiddleware
 from edgemem.proxy.budgeter import ContextBudgeter
 from edgemem.proxy.mcp_server import create_mcp_server, create_mcp_starlette_app
-from edgemem.proxy.middleware import MemoryMiddleware
+from edgemem.proxy.middleware import MemoryMiddleware, _get_message_text
 from edgemem.proxy.router import HybridRouter, RouteTarget
 from edgemem.proxy.streaming import (
     count_output_tokens_from_sse,
@@ -54,6 +56,11 @@ class ProxyCounters:
         self.cloud_requests: int = 0
         self.fallback_escalations: int = 0
         self.secrets_redacted_total: int = 0
+        self.task_tier_fast: int = 0
+        self.task_tier_balanced: int = 0
+        self.task_tier_deep: int = 0
+        self.prefix_cache_hits: int = 0
+        self.prefix_cache_misses: int = 0
 
     def inc_local(self) -> None:
         with self._lock:
@@ -73,14 +80,45 @@ class ProxyCounters:
         with self._lock:
             self.secrets_redacted_total += count
 
-    def snapshot(self) -> dict[str, int]:
+    def inc_task_tier(self, tier: str) -> None:
+        with self._lock:
+            if tier == "fast":
+                self.task_tier_fast += 1
+            elif tier == "deep":
+                self.task_tier_deep += 1
+            else:
+                self.task_tier_balanced += 1
+
+    def inc_prefix_hit(self) -> None:
+        with self._lock:
+            self.prefix_cache_hits += 1
+
+    def inc_prefix_miss(self) -> None:
+        with self._lock:
+            self.prefix_cache_misses += 1
+
+    def snapshot(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "local_requests": self.local_requests,
                 "cloud_requests": self.cloud_requests,
                 "fallback_escalations": self.fallback_escalations,
                 "secrets_redacted_total": self.secrets_redacted_total,
+                "task_tiers": {
+                    "fast": self.task_tier_fast,
+                    "balanced": self.task_tier_balanced,
+                    "deep": self.task_tier_deep,
+                },
+                "prefix_cache": {
+                    "hits": self.prefix_cache_hits,
+                    "misses": self.prefix_cache_misses,
+                },
             }
+
+
+_SESSION_PREFIX_CACHE: OrderedDict[str, str] = OrderedDict()
+_MAX_SESSION_PREFIX_CACHE = 256
+_SESSION_PREFIX_LOCK = threading.Lock()
 
 
 def _format_server_timing(
@@ -106,15 +144,21 @@ def _prepare_payload_for_target(
             if k not in upstream:
                 upstream[k] = v
 
-    if target.tier == "local" and target.decision and target.decision.inject_ollama_num_ctx:
-        raw_options = upstream.get("options")
-        options = dict(raw_options) if isinstance(raw_options, dict) else {}
-        if "num_ctx" in options and options["num_ctx"]:
-            options["num_ctx"] = min(int(options["num_ctx"]), target.decision.pressure_ctx_cap)
+    if target.tier == "local":
+        if router.config.resources.llama_cache_prompt and router.budgeter.backend == "llama_server":
+            upstream["cache_prompt"] = True
         else:
-            options["num_ctx"] = target.decision.selected_num_ctx
-        upstream["options"] = options
+            upstream.pop("cache_prompt", None)
+        if target.decision and target.decision.inject_ollama_num_ctx:
+            raw_options = upstream.get("options")
+            options = dict(raw_options) if isinstance(raw_options, dict) else {}
+            if "num_ctx" in options and options["num_ctx"]:
+                options["num_ctx"] = min(int(options["num_ctx"]), target.decision.pressure_ctx_cap)
+            else:
+                options["num_ctx"] = target.decision.selected_num_ctx
+            upstream["options"] = options
     elif target.tier == "cloud":
+        upstream.pop("cache_prompt", None)
         if "options" in upstream:
             if isinstance(upstream["options"], dict):
                 options = dict(upstream["options"])
@@ -434,6 +478,17 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
             "cloud_requests": stats["cloud_requests"],
             "fallback_escalations": stats["fallback_escalations"],
             "secrets_redacted_total": stats["secrets_redacted_total"],
+            "task_tiers": stats["task_tiers"],
+            "prefix_cache": {
+                "hits": stats["prefix_cache"]["hits"],
+                "misses": stats["prefix_cache"]["misses"],
+                "hit_rate_pct": round(
+                    (stats["prefix_cache"]["hits"] / (stats["prefix_cache"]["hits"] + stats["prefix_cache"]["misses"]) * 100.0)
+                    if (stats["prefix_cache"]["hits"] + stats["prefix_cache"]["misses"]) > 0
+                    else 0.0,
+                    1,
+                ),
+            },
             "auth_enabled": bool(c.security.resolve_auth_token()),
             "allow_remote_v1": c.security.allow_remote_v1,
         }
@@ -511,6 +566,28 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         )
         proxy_overhead_ms = (time.perf_counter() - t_ingress) * 1000.0
 
+        session_id = middleware._derive_session_id(body.get("messages", []), request.headers)
+        first_msg_text = ""
+        sent_messages = body.get("messages", [])
+        if sent_messages and isinstance(sent_messages, list):
+            first_msg_text = _get_message_text(sent_messages[0])
+        prefix_hash = hashlib.sha256(first_msg_text.encode("utf-8")).hexdigest()[:12]
+
+        with _SESSION_PREFIX_LOCK:
+            prev_hash = _SESSION_PREFIX_CACHE.get(session_id)
+            if prev_hash is not None and prev_hash == prefix_hash:
+                prefix_status = "hit"
+                cnt.inc_prefix_hit()
+            else:
+                prefix_status = "miss"
+                cnt.inc_prefix_miss()
+            _SESSION_PREFIX_CACHE[session_id] = prefix_hash
+            _SESSION_PREFIX_CACHE.move_to_end(session_id)
+            if len(_SESSION_PREFIX_CACHE) > _MAX_SESSION_PREFIX_CACHE:
+                _SESSION_PREFIX_CACHE.popitem(last=False)
+
+        cnt.inc_task_tier(target.task_tier)
+
         logger.info(
             "Incoming request: stream=%s, est_prompt_tokens=%d, model=%s, route=%s (%s)",
             is_stream,
@@ -547,6 +624,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 worker=worker,
                 unloader=active_unloader,
                 proxy_overhead_ms=proxy_overhead_ms,
+                prefix_status=prefix_status,
             )
         else:
             resp = await _handle_non_streaming_request(
@@ -568,6 +646,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 compacted_turns,
                 unloader=active_unloader,
                 proxy_overhead_ms=proxy_overhead_ms,
+                prefix_status=prefix_status,
             )
             if worker is not None:
                 worker.notify_turn()
@@ -600,12 +679,13 @@ async def _handle_non_streaming_request(
     compacted_turns: int,
     unloader: IdleUnloadWorker | None = None,
     proxy_overhead_ms: float = 0.0,
+    prefix_status: str = "miss",
 ) -> Response:
     timer = Timer()
     timer.__enter__()
     resp: httpx.Response | None = None
     fallback_target = (
-        router.cloud_fallback_target(body) if target.tier == "local" else None
+        router.cloud_fallback_target(body, task_tier=target.task_tier) if target.tier == "local" else None
     )
     fallback_used = False
 
@@ -672,6 +752,8 @@ async def _handle_non_streaming_request(
     resp_headers = {
         "X-EdgeMem-Route": target.tier,
         "X-EdgeMem-Route-Reason": target.reason,
+        "X-EdgeMem-Task-Tier": target.task_tier,
+        "X-EdgeMem-Prefix-Stable": prefix_status,
         "X-EdgeMem-Redacted": str(redacted_count),
         "X-EdgeMem-Overhead-Ms": f"{proxy_overhead_ms:.2f}",
         "Server-Timing": server_timing,
@@ -796,9 +878,10 @@ async def _handle_streaming_request(
     worker: ConsolidationWorker | None = None,
     unloader: IdleUnloadWorker | None = None,
     proxy_overhead_ms: float = 0.0,
+    prefix_status: str = "miss",
 ) -> StreamingResponse:
     fallback_target = (
-        router.cloud_fallback_target(body) if target.tier == "local" else None
+        router.cloud_fallback_target(body, task_tier=target.task_tier) if target.tier == "local" else None
     )
     fallback_used = False
     opened_resp: httpx.Response | None = None
@@ -841,6 +924,8 @@ async def _handle_streaming_request(
     resp_headers = {
         "X-EdgeMem-Route": target.tier,
         "X-EdgeMem-Route-Reason": target.reason,
+        "X-EdgeMem-Task-Tier": target.task_tier,
+        "X-EdgeMem-Prefix-Stable": prefix_status,
         "X-EdgeMem-Redacted": str(session.stats().total_redacted),
         "X-EdgeMem-Overhead-Ms": f"{proxy_overhead_ms:.2f}",
         "Server-Timing": server_timing,

@@ -43,10 +43,10 @@
 |---|---|---|---|---|
 | **FR-01a** | OpenAI-compatible proxy (`/v1`) & Streamable HTTP MCP server (`/mcp`) | Done | `edgemem.proxy.app`, `edgemem.proxy.mcp_server`, `edgemem.proxy.auth` | `tests/test_proxy.py`, `tests/test_security.py` |
 | **FR-01b** | Native Anthropic & Gemini schema adapters | Planned (1.1.x) | `edgemem.proxy.adapters` | Schema mapping specifications in PRD Section 4 |
-| **FR-02** | AST context slicer with PageRank symbol ranking | Done | `edgemem.slicer.repomap`, `edgemem.slicer.pagerank`, `edgemem.slicer.tags` | `tests/test_slicer.py`, Flask 83-file benchmark (99.2% token compression) |
-| **FR-03** | Complexity & hybrid local-to-cloud router | Done | `edgemem.proxy.router` | `tests/test_router.py` |
+| **FR-02** | AST context slicer with PageRank symbol ranking & 1-hop AST call-graph slicer (`focus_symbol`) | Done (v1.1.3) | `edgemem.slicer.repomap`, `edgemem.slicer.symbols`, `edgemem.slicer.pagerank`, `edgemem.slicer.tags` | `tests/test_slicer.py`, `tests/test_phase_1_1_3.py`, Flask 83-file benchmark (99.2% compression) |
+| **FR-03** | Complexity & hybrid router with Zero-LLM task-tier routing (`fast`/`balanced`/`deep`) | Done (v1.1.3) | `edgemem.proxy.router`, `edgemem.proxy.classifier` | `tests/test_router.py`, `tests/test_phase_1_1_3.py` |
 | **FR-04** | Tiered memory manager & compaction | Pivoted & Done | `edgemem.memory.store`, `edgemem.proxy.middleware`, `edgemem.memory.consolidator` | `tests/test_synthetic_memory.py`, `tests/test_memory_integration.py` |
-| **FR-05** | Exact fact & constraint retrieval store | Done | `edgemem.memory.store` (SQLite WAL + FTS5 BM25) | `tests/test_synthetic_memory.py` |
+| **FR-05** | Exact fact store with prefix-cache-stable prompt assembly | Done (v1.1.3) | `edgemem.memory.store`, `edgemem.proxy.middleware`, `edgemem.proxy.app` | `tests/test_synthetic_memory.py`, `tests/test_phase_1_1_3.py` |
 | **FR-06** | Hardware-aware inference tuning & active RAM/VRAM reduction | Done (v1.1.2) | `edgemem.proxy.watchdog`, `edgemem.proxy.budgeter`, `edgemem.proxy.unloader`, `edgemem.proxy.sysinfo` | `tests/test_ram_budgeting.py`, verified Lenovo LOQ benchmarks |
 | **FR-07** | Reversible secret & PII redaction gate | Done | `edgemem.privacy.redactor`, `edgemem.privacy.stream_restorer` | `tests/test_privacy.py`, `tests/test_synthetic_memory.py` |
 | **FR-08** | Reproducible benchmark harness & telemetry | Done | `bench/run_bench.py`, `edgemem.proxy.telemetry` | `bench/baselines/`, `tests/test_telemetry.py` |
@@ -88,3 +88,7 @@ This delta reflects LLM inference physics:
 - **v1.0.0 (Current):** Unified proxy, deterministic 3-tier memory, reversible secret redaction, PageRank AST repo map, and MCP server.
 - **v1.1.0 (Upcoming):** Expansion of stress benchmark suite to `n >= 20`, native Gemini adapter, and dynamic context budgeting.
 - **v1.1.2 (Hardware Integration & RAM Budgeting):** Unified `ContextBudgeter`, 3-OS RAM-pressure watchdog, and idle model auto-unload. Complete.
+- **v1.1.3 (AST Symbol Slicing, Task-Tier Routing & Prefix Caching):**
+  - **1-Hop AST Symbol & Call-Graph Slicer:** `SymbolDef` + `SymbolSliceResult` extraction with `mtime`-cached symbols; 0-hop body (~55%), 1-hop callees (~25%), 1-hop callers (~20%) budgeting with graceful query repo-map fallback. Exposed via CLI `edgemem slice --symbol` and MCP `edgemem_repo_map(focus_symbol=...)`.
+  - **Zero-LLM Task-Tier Expert Routing:** Deterministic heuristic classifier (< 0.1 ms latency, 0 LLM calls) assigning `fast`, `balanced`, or `deep` tiers; composed into `HybridRouter` with explicit route/watchdog/budgeter precedence and `X-EdgeMem-Task-Tier` header.
+  - **Prefix-Cache-Stable Prompt Assembly:** Consolidated `messages[0]` system prompt + byte-stable Core facts sorted by ID, turn Episodic facts attached to latest user turn under `<edgemem_context>`, SHA-256 session prefix tracking (`X-EdgeMem-Prefix-Stable: hit|miss`), and `llama_server` cache_prompt injection. Complete.

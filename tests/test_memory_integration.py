@@ -262,10 +262,10 @@ def test_multi_turn_constraint_injection(tmp_path: Path) -> None:
     first_msg = upstream_messages[0]
     assert first_msg["role"] == "system"
     content = first_msg["content"]
-    assert "[EdgeMem Active Memory]" in content
+    assert "[EdgeMem Active Memory]" in content or "--- EdgeMem Core Memory ---" in content
     assert "frozen and strictly immutable" in content
     assert "singleton" in content
-    assert "DEFAULT_EXPIRY" in content
+    assert "DEFAULT_EXPIRY" in content or "DEFAULT_EXPIRY" in upstream_messages[-1]["content"]
 
 
 def test_session_isolation_no_leak(tmp_path: Path) -> None:
@@ -551,7 +551,7 @@ def test_middle_turn_generic_boilerplate_is_compacted(tmp_path: Path) -> None:
     sent_messages = transport.recorded_bodies[0]["messages"]
     assert sent_messages[3]["content"] == "[Compacted earlier turn]"
     assert sent_messages[4]["content"] == "[Compacted earlier turn]"
-    assert not any("def test_helper" in m.get("content", "") for m in sent_messages[1:])
+    assert not any("def test_helper" in m.get("content", "") for m in sent_messages[1:-1])
 
 
 def test_middle_turn_domain_function_preserved(tmp_path: Path) -> None:
@@ -629,7 +629,7 @@ def test_short_conversation_default_config_skips_compaction(tmp_path: Path) -> N
     assert any("Added sanitize_input" in m.get("content", "") for m in sent_messages)
 
     first_content = sent_messages[0]["content"]
-    assert "[EdgeMem Active Memory]" in first_content
+    assert "[EdgeMem Active Memory]" in first_content or "--- EdgeMem Core Memory ---" in first_content
     assert "strictly immutable and frozen" in first_content
 
 

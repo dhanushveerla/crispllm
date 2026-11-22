@@ -44,6 +44,7 @@ class MemoryConfig:
     consolidation_idle_s: float = 30.0
     consolidation_every_n_turns: int = 8
     llm_synthesis: bool = False
+    prefix_stable_assembly: bool = True
 
 
 @dataclass
@@ -72,6 +73,10 @@ class RoutingConfig:
     escalate_token_threshold: int = 6000
     escalate_on_local_error: bool = True
     local_timeout_s: float = 30.0
+    task_routing_enabled: bool = False
+    fast_model: str | None = None
+    fast_max_tokens: int = 1200
+    escalate_deep_tasks: bool = True
 
 
 @dataclass
@@ -125,6 +130,7 @@ class ResourcesConfig:
     downshift_model: str | None = None
     idle_unload_enabled: bool = True
     idle_unload_s: float = 300.0
+    llama_cache_prompt: bool = True
 
 
 @dataclass
@@ -234,6 +240,9 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         llm_synthesis=bool(
             memory.get("llm_synthesis", MemoryConfig.llm_synthesis)
         ),
+        prefix_stable_assembly=bool(
+            memory.get("prefix_stable_assembly", MemoryConfig.prefix_stable_assembly)
+        ),
     )
 
     cloud_cfg = CloudUpstreamConfig(
@@ -258,6 +267,16 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         ),
         local_timeout_s=float(
             routing.get("local_timeout_s", RoutingConfig.local_timeout_s)
+        ),
+        task_routing_enabled=bool(
+            routing.get("task_routing_enabled", RoutingConfig.task_routing_enabled)
+        ),
+        fast_model=routing.get("fast_model", RoutingConfig.fast_model),
+        fast_max_tokens=int(
+            routing.get("fast_max_tokens", RoutingConfig.fast_max_tokens)
+        ),
+        escalate_deep_tasks=bool(
+            routing.get("escalate_deep_tasks", RoutingConfig.escalate_deep_tasks)
         ),
     )
 
@@ -297,6 +316,7 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         downshift_model=resources.get("downshift_model", ResourcesConfig.downshift_model),
         idle_unload_enabled=bool(resources.get("idle_unload_enabled", ResourcesConfig.idle_unload_enabled)),
         idle_unload_s=float(resources.get("idle_unload_s", ResourcesConfig.idle_unload_s)),
+        llama_cache_prompt=bool(resources.get("llama_cache_prompt", ResourcesConfig.llama_cache_prompt)),
     )
 
     return EdgeMemConfig(

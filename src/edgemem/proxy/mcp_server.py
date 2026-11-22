@@ -252,21 +252,24 @@ def create_mcp_server(
         max_tokens: int = 1024,
         query: str = "",
         focus_files: list[str] | None = None,
+        focus_symbol: str | None = None,
     ) -> dict:
         """Return a compact, ranked AST repository map for a given directory.
 
         The map is sliced to fit within `max_tokens` using PageRank over the
-        symbol dependency graph (Aider RepoMap algorithm, Apache-2.0).
+        symbol dependency graph (Aider RepoMap algorithm, Apache-2.0), or
+        1-hop symbol slice if `focus_symbol` is provided.
 
         Args:
-            repo_path:   Absolute or relative path to the repository root.
-            max_tokens:  Hard token budget for the output map (default 1024).
-            query:       Natural language query to boost relevant definitions.
-            focus_files: List of relative file paths to prioritise in ranking.
+            repo_path:    Absolute or relative path to the repository root.
+            max_tokens:   Hard token budget for the output map (default 1024).
+            query:        Natural language query to boost relevant definitions.
+            focus_files:  List of relative file paths to prioritise in ranking.
+            focus_symbol: Target symbol name for 1-hop AST call-graph slice.
 
         Returns:
             dict with keys:
-              - repo_map (str): The formatted repo map text.
+              - repo_map (str): The formatted repo map or symbol slice text.
               - sliced_tokens (int): Token count of the output map.
               - raw_tokens (int): Total token count of all source files.
               - compression_pct (float): Percentage reduction.
@@ -292,6 +295,27 @@ def create_mcp_server(
 
         rm = RepoMap(repo_path=rp, max_tokens=max_tokens)
         try:
+            if focus_symbol:
+                res = rm.slice_symbol(focus_symbol, token_budget=max_tokens)
+                elapsed_ms = (time.perf_counter() - t0) * 1000
+                compression_pct = (
+                    (res.raw_tokens - res.sliced_tokens) / res.raw_tokens * 100.0
+                    if res.raw_tokens > 0 else 0.0
+                )
+                return {
+                    "symbol":          res.symbol,
+                    "found":           res.found,
+                    "target_file":     res.target_file,
+                    "callee_count":    res.callee_count,
+                    "caller_count":    res.caller_count,
+                    "repo_map":        res.content,
+                    "sliced_tokens":   res.sliced_tokens,
+                    "raw_tokens":      res.raw_tokens,
+                    "fallback_used":   res.fallback_used,
+                    "compression_pct": round(compression_pct, 2),
+                    "latency_ms":      round(elapsed_ms, 1),
+                }
+
             raw_tokens = rm.raw_token_count()
             repo_map_text = rm.get_repo_map(
                 focus_files=focus_files,
