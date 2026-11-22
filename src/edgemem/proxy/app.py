@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import threading
+import time
 from typing import Any, AsyncIterator
 
 import httpx
@@ -80,6 +81,15 @@ class ProxyCounters:
                 "fallback_escalations": self.fallback_escalations,
                 "secrets_redacted_total": self.secrets_redacted_total,
             }
+
+
+def _format_server_timing(
+    proxy_overhead_ms: float, existing_header: str | None = None
+) -> str:
+    metric = f"edgemem_proxy;dur={proxy_overhead_ms:.2f}"
+    if existing_header:
+        return f"{existing_header}, {metric}"
+    return metric
 
 
 def _prepare_payload_for_target(
@@ -454,6 +464,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
     async def chat_completions(
         request: Request,
     ) -> StreamingResponse | JSONResponse | Response:
+        t_ingress = time.perf_counter()
         c: EdgeMemConfig = request.app.state.edgemem_config
         client: httpx.AsyncClient = request.app.state.edgemem_http_client
         tel: TelemetryLogger = request.app.state.edgemem_telemetry
@@ -498,6 +509,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         upstream_body, session, headers = _prepare_payload_for_target(
             body, target, app_redactor, app_router
         )
+        proxy_overhead_ms = (time.perf_counter() - t_ingress) * 1000.0
 
         logger.info(
             "Incoming request: stream=%s, est_prompt_tokens=%d, model=%s, route=%s (%s)",
@@ -534,6 +546,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 compacted_turns,
                 worker=worker,
                 unloader=active_unloader,
+                proxy_overhead_ms=proxy_overhead_ms,
             )
         else:
             resp = await _handle_non_streaming_request(
@@ -554,6 +567,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 tokens_saved,
                 compacted_turns,
                 unloader=active_unloader,
+                proxy_overhead_ms=proxy_overhead_ms,
             )
             if worker is not None:
                 worker.notify_turn()
@@ -585,6 +599,7 @@ async def _handle_non_streaming_request(
     tokens_saved: int,
     compacted_turns: int,
     unloader: IdleUnloadWorker | None = None,
+    proxy_overhead_ms: float = 0.0,
 ) -> Response:
     timer = Timer()
     timer.__enter__()
@@ -652,10 +667,14 @@ async def _handle_non_streaming_request(
         redacted_count,
     )
 
+    existing_timing = resp.headers.get("server-timing") if resp is not None else None
+    server_timing = _format_server_timing(proxy_overhead_ms, existing_timing)
     resp_headers = {
         "X-EdgeMem-Route": target.tier,
         "X-EdgeMem-Route-Reason": target.reason,
         "X-EdgeMem-Redacted": str(redacted_count),
+        "X-EdgeMem-Overhead-Ms": f"{proxy_overhead_ms:.2f}",
+        "Server-Timing": server_timing,
     }
 
     if resp.status_code >= 400:
@@ -776,6 +795,7 @@ async def _handle_streaming_request(
     compacted_turns: int,
     worker: ConsolidationWorker | None = None,
     unloader: IdleUnloadWorker | None = None,
+    proxy_overhead_ms: float = 0.0,
 ) -> StreamingResponse:
     fallback_target = (
         router.cloud_fallback_target(body) if target.tier == "local" else None
@@ -812,10 +832,18 @@ async def _handle_streaming_request(
     timer = Timer()
     timer.__enter__()
 
+    existing_timing = (
+        opened_resp.headers.get("server-timing")
+        if opened_resp is not None
+        else None
+    )
+    server_timing = _format_server_timing(proxy_overhead_ms, existing_timing)
     resp_headers = {
         "X-EdgeMem-Route": target.tier,
         "X-EdgeMem-Route-Reason": target.reason,
         "X-EdgeMem-Redacted": str(session.stats().total_redacted),
+        "X-EdgeMem-Overhead-Ms": f"{proxy_overhead_ms:.2f}",
+        "Server-Timing": server_timing,
     }
 
     async def raw_generator() -> AsyncIterator[str]:
