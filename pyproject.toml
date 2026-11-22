@@ -1,5 +1,5 @@
 [project]
-name = "edgemem"
+name = "edgemem-proxy"
 version = "1.1.0"
 description = "Lightweight unified memory & context proxy for AI coding on weak hardware"
 readme = "README.md"
@@ -58,10 +58,14 @@ Changelog = "https://github.com/dhanushveerla/edgemem/blob/master/CHANGELOG.md"
 
 [project.scripts]
 edgemem = "edgemem.cli:cli"
+edgemem-proxy = "edgemem.cli:cli"
 
 [build-system]
 requires = ["uv_build>=0.12.7,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "edgemem"
 
 [dependency-groups]
 dev = [

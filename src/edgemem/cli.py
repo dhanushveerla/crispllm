@@ -1,6 +1,6 @@
 """EdgeMem CLI - console entrypoint.
 
-Supports: edgemem serve, edgemem init, edgemem status, edgemem stats, edgemem slice, edgemem memory, edgemem unload.
+Supports: edgemem serve, edgemem init, edgemem status, edgemem stats, edgemem slice, edgemem memory, edgemem unload, edgemem doctor.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from edgemem.config import EdgeMemConfig, default_toml_content, load_config
 
 
 @click.group()
-@click.version_option(__version__, "--version", "-v", package_name="edgemem")
+@click.version_option(__version__, "--version", "-v", package_name="edgemem-proxy")
 def cli() -> None:
     """EdgeMem - Lightweight unified memory & context proxy."""
 
@@ -522,3 +522,64 @@ def llama_cmd(
     click.echo("")
     click.echo("Command:")
     click.echo(f"  {cmd_str}")
+
+
+@cli.command("doctor")
+@click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to edgemem.toml configuration file.")
+def doctor(config_path: Path | None) -> None:
+    """Check system environment, Tree-sitter parsers, SQLite FTS5 support, and hardware specs."""
+    import platform
+    import sqlite3
+
+    from edgemem.proxy.sysinfo import get_process_rss_mb, get_system_memory_info
+
+    click.echo(f"EdgeMem Doctor v{__version__}")
+    click.echo("=" * 40)
+
+    py_ver = sys.version.split()[0]
+    os_info = f"{platform.system()} {platform.release()} ({platform.machine()})"
+    click.echo(f"[OK] Python {py_ver} ({sys.executable})")
+    click.echo(f"[OK] OS: {os_info}")
+
+    mem = get_system_memory_info()
+    if mem:
+        click.echo(f"[OK] System RAM: {mem.available_mb:.0f} MB available / {mem.total_mb:.0f} MB total ({mem.used_percent:.1f}% used) [{mem.source}]")
+    else:
+        click.echo("[WARN] System RAM: Unable to determine memory metrics")
+
+    rss = get_process_rss_mb()
+    click.echo(f"[OK] Process RSS: {rss:.1f} MB")
+
+    try:
+        con = sqlite3.connect(":memory:")
+        con.execute("CREATE VIRTUAL TABLE _test_fts USING fts5(content);")
+        con.execute("INSERT INTO _test_fts VALUES ('edgemem test');")
+        rows = con.execute("SELECT * FROM _test_fts WHERE _test_fts MATCH 'edgemem';").fetchall()
+        con.close()
+        if rows:
+            click.echo(f"[OK] SQLite FTS5: available (SQLite {sqlite3.sqlite_version})")
+        else:
+            click.echo("[WARN] SQLite FTS5: query returned no rows")
+    except Exception as exc:
+        click.echo(f"[FAIL] SQLite FTS5: {exc}")
+
+    try:
+        from tree_sitter_language_pack import get_parser
+
+        parsers = []
+        for lang in ("python", "javascript", "typescript", "rust", "go"):
+            if get_parser(lang) is not None:
+                parsers.append(lang)
+        click.echo(f"[OK] Tree-sitter languages: {', '.join(parsers)}")
+    except Exception as exc:
+        click.echo(f"[WARN] Tree-sitter language pack: {exc}")
+
+    resolved_cfg = config_path or Path("edgemem.toml")
+    if resolved_cfg.exists():
+        try:
+            load_config(resolved_cfg)
+            click.echo(f"[OK] Config: {resolved_cfg} (valid)")
+        except Exception as exc:
+            click.echo(f"[FAIL] Config {resolved_cfg}: {exc}")
+    else:
+        click.echo(f"[INFO] Config: {resolved_cfg} not found (using defaults)")

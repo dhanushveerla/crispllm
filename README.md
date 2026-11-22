@@ -3,7 +3,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/dhanushveerla/edgemem/actions/workflows/ci.yml/badge.svg)](https://github.com/dhanushveerla/edgemem/actions/workflows/ci.yml)
-[![PyPI version](https://img.shields.io/badge/pypi-v1.1.0-orange.svg)](https://pypi.org/project/edgemem/)
+[![PyPI version](https://img.shields.io/badge/pypi-v1.1.0-orange.svg)](https://pypi.org/project/edgemem-proxy/)
 
 > **Local-first LLM memory, AST slicing, RAM-aware routing, and speculative decoding proxy built for 8 GB laptops (Linux, macOS, Windows).**
 
@@ -17,11 +17,11 @@ EdgeMem is a lightweight, zero-bloat OpenAI-compatible `/v1` proxy and Model Con
 
 ```bash
 # Run instantly with uvx (no install needed):
-uvx edgemem --help
+uvx edgemem-proxy --help
 
 # Or install via pip / uv:
-pip install edgemem
-# or: uv pip install edgemem
+pip install edgemem-proxy
+# or: uv pip install edgemem-proxy
 ```
 
 <details>
@@ -256,7 +256,7 @@ Add EdgeMem as an MCP server in your client configuration:
   "mcpServers": {
     "edgemem": {
       "command": "uvx",
-      "args": ["edgemem", "serve"]
+      "args": ["edgemem-proxy", "serve"]
     }
   }
 }

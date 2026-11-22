@@ -269,4 +269,10 @@ class TestVersionSync:
         assert "1.1.0" in result.output
 
         mcp = create_mcp_server()
+        assert mcp.name == "EdgeMem"
         assert mcp.version == "1.1.0"
+
+        doctor_res = runner.invoke(cli, ["doctor"])
+        assert doctor_res.exit_code == 0
+        assert "EdgeMem Doctor v1.1.0" in doctor_res.output
+        assert "[OK] SQLite FTS5" in doctor_res.output

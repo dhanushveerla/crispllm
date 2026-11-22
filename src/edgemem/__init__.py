@@ -4,6 +4,9 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version
 
 try:
-    __version__ = version("edgemem")
+    __version__ = version("edgemem-proxy")
 except PackageNotFoundError:
-    __version__ = "1.1.0"
+    try:
+        __version__ = version("edgemem")
+    except PackageNotFoundError:
+        __version__ = "1.1.0"
