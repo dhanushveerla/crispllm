@@ -213,3 +213,53 @@ idle_unload_s = 300.0
 
 # Inject cache_prompt=true for llama_server backends to persist prefix KV state.
 llama_cache_prompt = true
+
+[speculative]
+# Enable automatic Cloud Predicted Outputs injection on OpenAI-compatible cloud providers.
+# When true, requests containing an edit intent and code block are enriched with "prediction".
+predicted_outputs_enabled = false
+
+# Minimum length in characters of code block candidate before injecting prediction.
+min_prediction_chars = 120
+
+# Maximum length in characters of code block candidate. Larger blocks are skipped.
+max_prediction_chars = 24000
+
+# Minimum number of lines in code block candidate.
+min_prediction_lines = 4
+
+# Duration in seconds to cache unsupported cloud providers when HTTP 400 or 422 is returned.
+unsupported_provider_ttl_s = 1800.0
+
+# Local llama-server speculative preset: "ngram-simple", "ngram-mod", "draft", "hybrid"
+local_mode = "ngram-simple"
+
+# N-gram size for llama-server --spec-ngram-simple-size-n.
+ngram_simple_size_n = 12
+
+# N-gram match size for llama-server --spec-ngram-simple-size-m.
+ngram_simple_size_m = 32
+
+# Minimum hits required for llama-server --spec-ngram-simple-min-hits.
+ngram_simple_min_hits = 1
+
+# Window match size for llama-server --spec-ngram-mod-n-match.
+ngram_mod_n_match = 16
+
+# Minimum matches for llama-server --spec-ngram-mod-n-min.
+ngram_mod_n_min = 8
+
+# Maximum matches for llama-server --spec-ngram-mod-n-max.
+ngram_mod_n_max = 32
+
+# Path to draft GGUF model for "draft" or "hybrid" speculative presets.
+# draft_model_path = "/models/qwen2.5-coder-0.5b-instruct-q4_k_m.gguf"
+
+# Maximum speculative tokens to draft per step (--spec-draft-n-max).
+draft_n_max = 4
+
+# Minimum probability threshold for accepting draft tokens (--spec-draft-p-min).
+draft_p_min = 0.75
+
+# Number of layers of draft model to offload to GPU (-ngld).
+draft_gpu_layers = 99

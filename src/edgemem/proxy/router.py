@@ -34,6 +34,10 @@ class RouteTarget:
     task_tier: str = "balanced"
 
     @property
+    def is_cloud(self) -> bool:
+        return self.tier == "cloud"
+
+    @property
     def api_key(self) -> str | None:
         if not self.api_key_env:
             return None

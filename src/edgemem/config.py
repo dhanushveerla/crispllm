@@ -134,6 +134,28 @@ class ResourcesConfig:
 
 
 @dataclass
+class SpeculativeConfig:
+    """Configuration for Cloud Predicted Outputs and local llama-server speculative presets."""
+
+    predicted_outputs_enabled: bool = False
+    min_prediction_chars: int = 120
+    max_prediction_chars: int = 24000
+    min_prediction_lines: int = 4
+    unsupported_provider_ttl_s: float = 1800.0
+    local_mode: str = "ngram-simple"
+    ngram_simple_size_n: int = 12
+    ngram_simple_size_m: int = 32
+    ngram_simple_min_hits: int = 1
+    ngram_mod_n_match: int = 16
+    ngram_mod_n_min: int = 8
+    ngram_mod_n_max: int = 32
+    draft_model_path: str | None = None
+    draft_n_max: int = 4
+    draft_p_min: float = 0.75
+    draft_gpu_layers: int = 99
+
+
+@dataclass
 class EdgeMemConfig:
     """Full EdgeMem configuration."""
 
@@ -154,6 +176,7 @@ class EdgeMemConfig:
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     resources: ResourcesConfig = field(default_factory=ResourcesConfig)
+    speculative: SpeculativeConfig = field(default_factory=SpeculativeConfig)
 
     @property
     def upstream_api_key(self) -> str | None:
@@ -196,6 +219,7 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
     privacy = raw.get("privacy", {})
     security = raw.get("security", {})
     resources = raw.get("resources", {})
+    speculative = raw.get("speculative", {})
 
     memory_cfg = MemoryConfig(
         enabled=memory.get("enabled", MemoryConfig.enabled),
@@ -319,6 +343,103 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         llama_cache_prompt=bool(resources.get("llama_cache_prompt", ResourcesConfig.llama_cache_prompt)),
     )
 
+    speculative_cfg = SpeculativeConfig(
+        predicted_outputs_enabled=bool(
+            speculative.get(
+                "predicted_outputs_enabled",
+                SpeculativeConfig.predicted_outputs_enabled,
+            )
+        ),
+        min_prediction_chars=int(
+            speculative.get(
+                "min_prediction_chars",
+                SpeculativeConfig.min_prediction_chars,
+            )
+        ),
+        max_prediction_chars=int(
+            speculative.get(
+                "max_prediction_chars",
+                SpeculativeConfig.max_prediction_chars,
+            )
+        ),
+        min_prediction_lines=int(
+            speculative.get(
+                "min_prediction_lines",
+                SpeculativeConfig.min_prediction_lines,
+            )
+        ),
+        unsupported_provider_ttl_s=float(
+            speculative.get(
+                "unsupported_provider_ttl_s",
+                SpeculativeConfig.unsupported_provider_ttl_s,
+            )
+        ),
+        local_mode=str(
+            speculative.get(
+                "local_mode",
+                SpeculativeConfig.local_mode,
+            )
+        ),
+        ngram_simple_size_n=int(
+            speculative.get(
+                "ngram_simple_size_n",
+                SpeculativeConfig.ngram_simple_size_n,
+            )
+        ),
+        ngram_simple_size_m=int(
+            speculative.get(
+                "ngram_simple_size_m",
+                SpeculativeConfig.ngram_simple_size_m,
+            )
+        ),
+        ngram_simple_min_hits=int(
+            speculative.get(
+                "ngram_simple_min_hits",
+                SpeculativeConfig.ngram_simple_min_hits,
+            )
+        ),
+        ngram_mod_n_match=int(
+            speculative.get(
+                "ngram_mod_n_match",
+                SpeculativeConfig.ngram_mod_n_match,
+            )
+        ),
+        ngram_mod_n_min=int(
+            speculative.get(
+                "ngram_mod_n_min",
+                SpeculativeConfig.ngram_mod_n_min,
+            )
+        ),
+        ngram_mod_n_max=int(
+            speculative.get(
+                "ngram_mod_n_max",
+                SpeculativeConfig.ngram_mod_n_max,
+            )
+        ),
+        draft_model_path=speculative.get(
+            "draft_model_path",
+            SpeculativeConfig.draft_model_path,
+        ),
+        draft_n_max=int(
+            speculative.get(
+                "draft_n_max",
+                SpeculativeConfig.draft_n_max,
+            )
+        ),
+        draft_p_min=float(
+            speculative.get(
+                "draft_p_min",
+                SpeculativeConfig.draft_p_min,
+            )
+        ),
+        draft_gpu_layers=int(
+            speculative.get(
+                "draft_gpu_layers",
+                SpeculativeConfig.draft_gpu_layers,
+            )
+        ),
+    )
+
     return EdgeMemConfig(
         host=server.get("host", EdgeMemConfig.host),
         port=server.get("port", EdgeMemConfig.port),
@@ -335,6 +456,7 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         privacy=privacy_cfg,
         security=security_cfg,
         resources=resources_cfg,
+        speculative=speculative_cfg,
     )
 
 

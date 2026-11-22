@@ -216,6 +216,15 @@ def status(config_path: Path | None) -> None:
         if "prefix_cache" in data and isinstance(data["prefix_cache"], dict):
             pc = data["prefix_cache"]
             click.echo(f"Prefix Cache: hits={pc.get('hits', 0)}, misses={pc.get('misses', 0)}, hit_rate={pc.get('hit_rate_pct', 0.0):.1f}%")
+        if "speculative" in data and isinstance(data["speculative"], dict):
+            sp = data["speculative"]
+            c_inj = sp.get("cloud_injected", 0)
+            c_ret = sp.get("cloud_fallback_retries", 0)
+            c_acc = sp.get("cloud_accepted_tokens", 0)
+            c_tot = c_acc + sp.get("cloud_rejected_tokens", 0)
+            c_pct = sp.get("cloud_acceptance_pct")
+            pct_str = f"{c_pct:.1f}%" if c_pct is not None else "N/A"
+            click.echo(f"Speculative: cloud_injected={c_inj}, retries={c_ret}, accepted={c_acc}/{c_tot} ({pct_str})")
     except httpx.ConnectError:
         click.echo(f"EdgeMem not running at {url}", err=True)
         sys.exit(1)
@@ -455,3 +464,60 @@ def memory_clear(session: str | None, config_path: Path | None) -> None:
         else:
             count = store.clear_all()
             click.echo(f"Cleared all {count} facts from memory.")
+
+
+@cli.command("llama-cmd")
+@click.option("--model", default=None, help="Main GGUF model path.")
+@click.option("--draft-model", default=None, help="Draft GGUF model path.")
+@click.option("--mode", default=None, help="Speculative preset mode (ngram-simple, ngram-mod, draft, hybrid, none).")
+@click.option("--profile", default="auto", help="Hardware profile (auto, t1-cpu, t2-gpu, t2-arc, t3-rtx).")
+@click.option("--binary", default="llama-server", help="Path to llama-server binary.")
+@click.option("--device", default=None, help="Target device (cpu, vulkan, cuda, mps).")
+@click.option("--ctx-size", default=None, type=int, help="Main model context window (default: 8192).")
+@click.option("--port", default=8080, type=int, help="Listen port (default: 8080).")
+@click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path), help="Path to edgemem.toml configuration file.")
+def llama_cmd(
+    model: str | None,
+    draft_model: str | None,
+    mode: str | None,
+    profile: str,
+    binary: str,
+    device: str | None,
+    ctx_size: int | None,
+    port: int,
+    config_path: Path | None,
+) -> None:
+    """Generate ready-to-run llama-server command with speculative decoding presets."""
+    from edgemem.proxy.speculative import build_llama_server_command
+    from edgemem.proxy.watchdog import RamPressureWatchdog
+
+    cfg = load_config(config_path)
+    model_path = model or cfg.model
+    spec_mode = mode or cfg.speculative.local_mode
+    draft_path = draft_model or cfg.speculative.draft_model_path
+    c_size = ctx_size or cfg.resources.max_local_ctx
+    watchdog = RamPressureWatchdog(cfg.resources)
+
+    preset = build_llama_server_command(
+        model_path=model_path,
+        draft_model_path=draft_path,
+        mode=spec_mode,
+        profile=profile,
+        binary=binary,
+        device=device,
+        ctx_size=c_size,
+        port=port,
+        config=cfg.speculative,
+        watchdog=watchdog,
+    )
+
+    cmd_str = preset.render_shell_command()
+    click.echo("llama-server Speculative Configuration:")
+    click.echo(f"  Profile:   {preset.profile}")
+    click.echo(f"  Mode:      {preset.effective_mode}")
+    click.echo(f"  Extra RAM: {preset.estimated_extra_ram_mb} MB")
+    if preset.downgrade_reason:
+        click.echo(f"  Downgrade: {preset.downgrade_reason}")
+    click.echo("")
+    click.echo("Command:")
+    click.echo(f"  {cmd_str}")

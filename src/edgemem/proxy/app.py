@@ -30,6 +30,11 @@ from edgemem.proxy.budgeter import ContextBudgeter
 from edgemem.proxy.mcp_server import create_mcp_server, create_mcp_starlette_app
 from edgemem.proxy.middleware import MemoryMiddleware, _get_message_text
 from edgemem.proxy.router import HybridRouter, RouteTarget
+from edgemem.proxy.speculative import (
+    PredictedOutputsEngine,
+    PredictionDecision,
+    SpeculativeStats,
+)
 from edgemem.proxy.streaming import (
     count_output_tokens_from_sse,
     estimate_tokens_from_messages,
@@ -347,6 +352,8 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
     budgeter = ContextBudgeter(cfg)
     router = HybridRouter(cfg, budgeter=budgeter, watchdog=watchdog)
     unloader = IdleUnloadWorker(cfg, http_client=None)
+    pred_engine = PredictedOutputsEngine(cfg.speculative)
+    spec_stats = SpeculativeStats()
     redaction_config = RedactionConfig(
         enabled=cfg.privacy.enabled,
         redact_secrets=cfg.privacy.redact_secrets,
@@ -389,6 +396,8 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         app.state.edgemem_watchdog = watchdog
         app.state.edgemem_budgeter = budgeter
         app.state.edgemem_unloader = unloader
+        app.state.edgemem_pred_engine = pred_engine
+        app.state.edgemem_spec_stats = spec_stats
         app.state.edgemem_last_num_ctx = None
 
         if cfg.memory.enabled and cfg.memory.consolidation_enabled:
@@ -421,6 +430,8 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
     app.state.edgemem_watchdog = watchdog
     app.state.edgemem_budgeter = budgeter
     app.state.edgemem_unloader = unloader
+    app.state.edgemem_pred_engine = pred_engine
+    app.state.edgemem_spec_stats = spec_stats
     app.state.edgemem_last_num_ctx = None
 
     @app.get("/health")
@@ -436,6 +447,9 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         )
         unloader: IdleUnloadWorker | None = getattr(
             request.app.state, "edgemem_unloader", None
+        )
+        spec_stats: SpeculativeStats | None = getattr(
+            request.app.state, "edgemem_spec_stats", None
         )
         last_num_ctx = getattr(request.app.state, "edgemem_last_num_ctx", None)
 
@@ -496,6 +510,8 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
             payload["system_memory"] = system_memory_data
         if resources_data is not None:
             payload["resources"] = resources_data
+        if spec_stats is not None:
+            payload["speculative"] = spec_stats.snapshot()
 
         return JSONResponse(payload)
 
@@ -528,6 +544,8 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         app_router: HybridRouter = request.app.state.edgemem_router
         app_redactor: SecretRedactor = request.app.state.edgemem_redactor
         cnt: ProxyCounters = request.app.state.edgemem_counters
+        pred_engine: PredictedOutputsEngine = request.app.state.edgemem_pred_engine
+        spec_stats: SpeculativeStats = request.app.state.edgemem_spec_stats
 
         body = await request.json()
         is_stream = body.get("stream", False)
@@ -564,6 +582,24 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         upstream_body, session, headers = _prepare_payload_for_target(
             body, target, app_redactor, app_router
         )
+        header_pred = request.headers.get("X-EdgeMem-Prediction") or request.headers.get("x-edgemem-prediction")
+        spec_decision = pred_engine.evaluate(
+            body,
+            target_is_cloud=target.is_cloud,
+            base_url=target.base_url,
+            model=target.model,
+            header_mode=header_pred,
+        )
+        if spec_decision.inject:
+            upstream_body["prediction"] = spec_decision.prediction_payload
+            spec_header = "predicted_outputs"
+            spec_stats.inc_injected()
+        else:
+            if not target.is_cloud and c.resources.local_backend == "llama_server":
+                spec_header = "local_preset"
+            else:
+                spec_header = f"skipped:{spec_decision.reason}"
+            spec_stats.inc_skipped()
         proxy_overhead_ms = (time.perf_counter() - t_ingress) * 1000.0
 
         session_id = middleware._derive_session_id(body.get("messages", []), request.headers)
@@ -625,6 +661,10 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 unloader=active_unloader,
                 proxy_overhead_ms=proxy_overhead_ms,
                 prefix_status=prefix_status,
+                pred_engine=pred_engine,
+                spec_stats=spec_stats,
+                spec_decision=spec_decision,
+                spec_header=spec_header,
             )
         else:
             resp = await _handle_non_streaming_request(
@@ -647,6 +687,10 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                 unloader=active_unloader,
                 proxy_overhead_ms=proxy_overhead_ms,
                 prefix_status=prefix_status,
+                pred_engine=pred_engine,
+                spec_stats=spec_stats,
+                spec_decision=spec_decision,
+                spec_header=spec_header,
             )
             if worker is not None:
                 worker.notify_turn()
@@ -680,6 +724,10 @@ async def _handle_non_streaming_request(
     unloader: IdleUnloadWorker | None = None,
     proxy_overhead_ms: float = 0.0,
     prefix_status: str = "miss",
+    pred_engine: PredictedOutputsEngine | None = None,
+    spec_stats: SpeculativeStats | None = None,
+    spec_decision: PredictionDecision | None = None,
+    spec_header: str = "",
 ) -> Response:
     timer = Timer()
     timer.__enter__()
@@ -726,6 +774,26 @@ async def _handle_non_streaming_request(
             timeout=target.timeout_s,
         )
 
+    if (
+        target.tier == "cloud"
+        and spec_decision is not None
+        and spec_decision.inject
+        and resp is not None
+        and resp.status_code in (400, 422)
+    ):
+        if pred_engine is not None:
+            pred_engine.mark_unsupported(target.base_url, target.model)
+        upstream_body.pop("prediction", None)
+        if spec_stats is not None:
+            spec_stats.inc_fallback_retry()
+        spec_header = "fallback_retry"
+        resp = await client.post(
+            target_url,
+            json=upstream_body,
+            headers=headers,
+            timeout=target.timeout_s,
+        )
+
     timer.mark_first_token()
     timer.__exit__(None, None, None)
 
@@ -756,6 +824,7 @@ async def _handle_non_streaming_request(
         "X-EdgeMem-Prefix-Stable": prefix_status,
         "X-EdgeMem-Redacted": str(redacted_count),
         "X-EdgeMem-Overhead-Ms": f"{proxy_overhead_ms:.2f}",
+        "X-EdgeMem-Speculative": spec_header,
         "Server-Timing": server_timing,
     }
 
@@ -815,6 +884,8 @@ async def _handle_non_streaming_request(
 
     output_tokens = 0
     if isinstance(data, dict):
+        if spec_stats is not None:
+            spec_stats.record_usage_payload(data, is_cloud=target.is_cloud)
         usage = data.get("usage")
         if isinstance(usage, dict):
             output_tokens = usage.get("completion_tokens", 0)
@@ -879,6 +950,10 @@ async def _handle_streaming_request(
     unloader: IdleUnloadWorker | None = None,
     proxy_overhead_ms: float = 0.0,
     prefix_status: str = "miss",
+    pred_engine: PredictedOutputsEngine | None = None,
+    spec_stats: SpeculativeStats | None = None,
+    spec_decision: PredictionDecision | None = None,
+    spec_header: str = "",
 ) -> StreamingResponse:
     fallback_target = (
         router.cloud_fallback_target(body, task_tier=target.task_tier) if target.tier == "local" else None
@@ -912,6 +987,41 @@ async def _handle_streaming_request(
             )
             target_url = f"{target.base_url.rstrip('/')}/chat/completions"
 
+    if (
+        target.tier == "cloud"
+        and spec_decision is not None
+        and spec_decision.inject
+        and opened_resp is None
+    ):
+        try:
+            req = client.build_request(
+                "POST",
+                target_url,
+                json=upstream_body,
+                headers=headers,
+                timeout=target.timeout_s,
+            )
+            opened_resp = await client.send(req, stream=True)
+            if opened_resp.status_code in (400, 422):
+                await opened_resp.aclose()
+                opened_resp = None
+                if pred_engine is not None:
+                    pred_engine.mark_unsupported(target.base_url, target.model)
+                upstream_body.pop("prediction", None)
+                if spec_stats is not None:
+                    spec_stats.inc_fallback_retry()
+                spec_header = "fallback_retry"
+                req2 = client.build_request(
+                    "POST",
+                    target_url,
+                    json=upstream_body,
+                    headers=headers,
+                    timeout=target.timeout_s,
+                )
+                opened_resp = await client.send(req2, stream=True)
+        except Exception:
+            opened_resp = None
+
     timer = Timer()
     timer.__enter__()
 
@@ -928,6 +1038,7 @@ async def _handle_streaming_request(
         "X-EdgeMem-Prefix-Stable": prefix_status,
         "X-EdgeMem-Redacted": str(session.stats().total_redacted),
         "X-EdgeMem-Overhead-Ms": f"{proxy_overhead_ms:.2f}",
+        "X-EdgeMem-Speculative": spec_header,
         "Server-Timing": server_timing,
     }
 
@@ -957,6 +1068,15 @@ async def _handle_streaming_request(
             wrapped = _restoring_stream_wrapper(raw_generator(), session)
             async for sse_line in wrapped:
                 output_tokens += count_output_tokens_from_sse(sse_line)
+                if spec_stats is not None and sse_line.startswith("data: "):
+                    payload_txt = sse_line[6:].strip()
+                    if payload_txt and payload_txt != "[DONE]":
+                        try:
+                            parsed_chunk = json.loads(payload_txt)
+                            if isinstance(parsed_chunk, dict) and ("usage" in parsed_chunk or "timings" in parsed_chunk):
+                                spec_stats.record_usage_payload(parsed_chunk, is_cloud=target.is_cloud)
+                        except Exception:
+                            pass
                 yield sse_line
         except Exception:
             logger.exception("Error during streaming response")

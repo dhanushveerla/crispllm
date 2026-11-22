@@ -50,6 +50,7 @@
 | **FR-06** | Hardware-aware inference tuning & active RAM/VRAM reduction | Done (v1.1.2) | `edgemem.proxy.watchdog`, `edgemem.proxy.budgeter`, `edgemem.proxy.unloader`, `edgemem.proxy.sysinfo` | `tests/test_ram_budgeting.py`, verified Lenovo LOQ benchmarks |
 | **FR-07** | Reversible secret & PII redaction gate | Done | `edgemem.privacy.redactor`, `edgemem.privacy.stream_restorer` | `tests/test_privacy.py`, `tests/test_synthetic_memory.py` |
 | **FR-08** | Reproducible benchmark harness & telemetry | Done | `bench/run_bench.py`, `edgemem.proxy.telemetry` | `bench/baselines/`, `tests/test_telemetry.py` |
+| **FR-09** | Speculative token generation (Cloud Predicted Outputs & local llama-server presets) | Done (v1.1.4) | `edgemem.proxy.speculative`, `edgemem.proxy.app`, `edgemem.cli` | `tests/test_phase_1_1_4.py` |
 
 ---
 
@@ -63,12 +64,16 @@
   - **T2 Mid (Empirical Testbed):** Lenovo LOQ `83FQ` (Intel Core i5, 7.7 GB usable RAM, Intel Arc A530M 4 GB VRAM). Reclassified accurately as T2 mid-tier validation.
   - **T3 High:** Entry discrete GPU (>= 8 GB VRAM) with speculative decoding validation.
 
-### Lenovo LOQ Benchmark Measurements (Phase 1.1.2)
+### Lenovo LOQ Benchmark Measurements (Phase 1.1.2 & 1.1.3)
 Measurements conducted on Windows 11 Home, Lenovo LOQ `83FQ` (Intel Core i5-12450HX, 7.7 GB usable RAM, Intel Arc A530M 4 GB VRAM):
 - **T1-Bloated (Unbudgeted Baseline):** Unconstrained Ollama (`num_ctx=8192` default KV cache) with `qwen2.5-coder:1.5b` reached Peak System RSS of **4.18 GB** (~54% of physical RAM), breaching the <= 3.0 GB constraint during multi-turn generation.
 - **T1-Budgeted (ContextBudgeter + Watchdog):** Dynamic context bucketing (`ctx_buckets=[2048, 4096, 8192]`) and watchdog-driven context capping reduced Peak System RSS to **2.74 GB** (well within the <= 3.0 GB ceiling). EdgeMem proxy RSS held steady at **80.4 MB**.
 - **T2-Vulkan (Intel Arc A530M Offload):** Offloading weights to the discrete GPU utilized **1.82 GB VRAM**, reducing Host System RAM consumption of the local model to **1.08 GB**.
 - **Idle Auto-Unload:** Idle unloader worker triggered after configured timeout (`idle_unload_s = 300.0`), issuing `keep_alive: 0` to release model weights and returning system available RAM to baseline within 2.1 seconds.
+- **Phase 1.1.3 Prefix-Caching Benchmarks:**
+  - **T1-CPU:** Latency reduced from **2441.0 ms -> 800.2 ms** (a **3.05x speedup / -67.2% reduction**), with cached tokens increasing from `139 -> 814` tokens.
+  - **T2-Vulkan (Arc A530M):** Latency reduced from **2469.5 ms -> 773.4 ms** (a **3.19x speedup / -68.7% reduction**), with cached tokens increasing from `139 -> 812` tokens and `3/3` prefix cache hits.
+  - **AST Symbol Slicing (`slice_symbol`):** Warm execution latency of **47 ms** on the EdgeMem repository with **99.7% token compression** relative to full repository dump.
 
 ### Sample Sizes & Pass@1 Benchmarks
 - **Standard Suite:** `n=20` synthetic coding tasks (10 exact-fact constraints + 10 conversational continuity). Measured: Raw 75.0% (15/20) vs. EdgeMem 80.0% (16/20), delta +5.0 pp.
@@ -92,3 +97,8 @@ This delta reflects LLM inference physics:
   - **1-Hop AST Symbol & Call-Graph Slicer:** `SymbolDef` + `SymbolSliceResult` extraction with `mtime`-cached symbols; 0-hop body (~55%), 1-hop callees (~25%), 1-hop callers (~20%) budgeting with graceful query repo-map fallback. Exposed via CLI `edgemem slice --symbol` and MCP `edgemem_repo_map(focus_symbol=...)`.
   - **Zero-LLM Task-Tier Expert Routing:** Deterministic heuristic classifier (< 0.1 ms latency, 0 LLM calls) assigning `fast`, `balanced`, or `deep` tiers; composed into `HybridRouter` with explicit route/watchdog/budgeter precedence and `X-EdgeMem-Task-Tier` header.
   - **Prefix-Cache-Stable Prompt Assembly:** Consolidated `messages[0]` system prompt + byte-stable Core facts sorted by ID, turn Episodic facts attached to latest user turn under `<edgemem_context>`, SHA-256 session prefix tracking (`X-EdgeMem-Prefix-Stable: hit|miss`), and `llama_server` cache_prompt injection. Complete.
+- **v1.1.4 (Speculative Token Generation & Preset Engine):**
+  - **Cloud Predicted Outputs Injection:** Deterministic edit-intent classification and candidate extraction for OpenAI-compatible cloud endpoints. Incompatible parameter gating (`tools`, `n > 1`, `logprobs`, `presence_penalty`, `response_format`).
+  - **Fail-Open Circuit Breaker:** Automatic retry on HTTP 400/422 with stripped prediction and 1800s TTL provider caching.
+  - **llama-server Speculative Presets:** Exact llama.cpp b12631+ CLI support for `ngram-simple`, `ngram-mod`, `draft`, and `hybrid` with automated RAM-pressure safety guards and OS-safe shell command generation (`edgemem llama-cmd`).
+  - **Speculative Acceptance Telemetry:** Tracking cloud and local speculative acceptance in `/health` and `edgemem status`. Complete.
