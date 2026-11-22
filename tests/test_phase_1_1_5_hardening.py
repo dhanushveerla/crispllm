@@ -261,18 +261,18 @@ class TestVersionSync:
         from crispllm.cli import cli
         from crispllm.proxy.mcp_server import create_mcp_server
 
-        assert __version__ == "1.1.0"
+        assert __version__ == "1.1.1"
 
         runner = CliRunner()
         result = runner.invoke(cli, ["--version"])
         assert result.exit_code == 0
-        assert "1.1.0" in result.output
+        assert "1.1.1" in result.output
 
         mcp = create_mcp_server()
         assert mcp.name == "CrispLLM"
-        assert mcp.version == "1.1.0"
+        assert mcp.version == "1.1.1"
 
         doctor_res = runner.invoke(cli, ["doctor"])
         assert doctor_res.exit_code == 0
-        assert "CrispLLM Doctor v1.1.0" in doctor_res.output
+        assert "CrispLLM Doctor v1.1.1" in doctor_res.output
         assert "[OK] SQLite FTS5" in doctor_res.output

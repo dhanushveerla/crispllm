@@ -17,7 +17,12 @@ from typing import Any, Mapping
 from crispllm.config import MemoryConfig
 from crispllm.memory.extractor import extract_facts_from_messages
 from crispllm.memory.store import Fact, MemoryStore, compute_effective_salience
-from crispllm.privacy.redactor import sanitize_fact, sanitize_for_memory
+from crispllm.privacy.redactor import (
+    RedactionSession,
+    SecretRedactor,
+    sanitize_fact,
+    sanitize_for_memory,
+)
 
 logger = logging.getLogger("crispllm.proxy.memory")
 
@@ -140,9 +145,15 @@ def _normalize_fact_value(val: str) -> str:
 class MemoryMiddleware:
     """Proxy middleware for transparent tiered memory retrieval, extraction, and compaction."""
 
-    def __init__(self, store: MemoryStore, config: MemoryConfig) -> None:
+    def __init__(
+        self,
+        store: MemoryStore,
+        config: MemoryConfig,
+        redactor: SecretRedactor | None = None,
+    ) -> None:
         self.store = store
         self.config = config
+        self.redactor = redactor
 
     def _derive_session_id(
         self, messages: list[dict[str, Any]], headers: Mapping[str, str]
@@ -221,10 +232,20 @@ class MemoryMiddleware:
 
             facts_extracted = 0
             if self.config.auto_extract and len(user_indices) > 1:
-                extracted = extract_facts_from_messages(messages)
+                active_redactor = self.redactor or SecretRedactor()
+                extract_messages = messages
+                if getattr(active_redactor.config, "enabled", True):
+                    redact_session = RedactionSession()
+                    extract_messages = active_redactor.redact_messages(
+                        messages, redact_session
+                    )
+                extracted = extract_facts_from_messages(extract_messages)
                 for ef in extracted:
                     clean_k, clean_v = sanitize_fact(ef.key, ef.value)
-                    if clean_v == "[REDACTED_SECRET]" and ef.kind in ("constant", "note"):
+                    if (
+                        clean_v == "[REDACTED_SECRET]"
+                        or "[REDACTED_SECRET]" in clean_v
+                    ) and ef.kind in ("constant", "note"):
                         continue
                     try:
                         self.store.upsert_fact(
@@ -256,8 +277,9 @@ class MemoryMiddleware:
 
             episodic_facts: list[Fact] = []
             if last_user_text:
+                clean_query = sanitize_for_memory(last_user_text)
                 search_res = self.store.search_facts(
-                    query=last_user_text,
+                    query=clean_query,
                     session_id=session_id,
                     include_global=True,
                     tier="episodic",

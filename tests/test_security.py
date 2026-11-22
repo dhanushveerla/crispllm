@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import sqlite3
 import sys
 import types
 from contextlib import asynccontextmanager
@@ -13,7 +14,14 @@ import httpx
 import pytest
 from starlette.testclient import TestClient
 
-from crispllm.config import EdgeMemConfig, MemoryConfig, SecurityConfig
+from crispllm.config import (
+    CloudUpstreamConfig,
+    EdgeMemConfig,
+    MemoryConfig,
+    PrivacyConfig,
+    RoutingConfig,
+    SecurityConfig,
+)
 from crispllm.proxy.app import create_app
 from crispllm.proxy.mcp_server import create_mcp_server
 from crispllm.proxy.sysinfo import get_process_rss_mb
@@ -122,7 +130,7 @@ def test_backward_compatibility_defaults(tmp_path, monkeypatch):
         assert mcp_resp.status_code == 200
         init_data = mcp_resp.json()
         assert init_data.get("result", {}).get("serverInfo", {}).get("name") in ("CrispLLM", "EdgeMem")
-        assert init_data.get("result", {}).get("serverInfo", {}).get("version") == "1.1.0"
+        assert init_data.get("result", {}).get("serverInfo", {}).get("version") == "1.1.1"
 
 
 def test_bearer_auth_via_env_var(tmp_path, monkeypatch):
@@ -375,3 +383,224 @@ def test_sysinfo_get_process_rss_mb():
             with patch.dict(sys.modules, {"resource": mock_failing_resource}):
                 rss_fallback = get_process_rss_mb()
                 assert rss_fallback == 0.0
+
+
+def test_secret_never_stored_in_memory_json_path(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    outbound_requests: list[dict[str, Any]] = []
+
+    class MockCloudTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            req_json = json.loads(request.content.decode("utf-8"))
+            outbound_requests.append(req_json)
+            last_content = str(req_json.get("messages", [{}])[-1].get("content", ""))
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-sec-json",
+                    "object": "chat.completion",
+                    "model": "cloud-model",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": f"Acknowledged: {last_content}",
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                },
+                headers={"content-type": "application/json"},
+            )
+
+    cfg = EdgeMemConfig(
+        host="127.0.0.1",
+        port=8080,
+        model="cloud-model",
+        cloud=CloudUpstreamConfig(
+            enabled=True,
+            base_url="http://mock-cloud-upstream",
+            model="cloud-model",
+        ),
+        routing=RoutingConfig(strategy="cloud_only"),
+        privacy=PrivacyConfig(enabled=True, redact_on_cloud_only=True),
+        memory=MemoryConfig(enabled=True, auto_extract=True, db_path=str(db_path)),
+        security=SecurityConfig(),
+    )
+    application = create_app(cfg)
+    orig_lifespan = application.router.lifespan_context
+
+    @asynccontextmanager
+    async def patched_lifespan(app):
+        async with orig_lifespan(app):
+            old = app.state.edgemem_http_client
+            await old.aclose()
+            app.state.edgemem_http_client = httpx.AsyncClient(
+                transport=MockCloudTransport(),
+                base_url="http://mock-cloud-upstream",
+            )
+            yield
+            await app.state.edgemem_http_client.aclose()
+
+    application.router.lifespan_context = patched_lifespan
+
+    with TestClient(application) as client:
+        secret = "sk-proj-testsecret12345678901234567890abcdef"
+        resp1 = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "cloud-model",
+                "messages": [{"role": "user", "content": f"My secret is {secret}"}],
+            },
+        )
+        assert resp1.status_code == 200
+        assert secret in resp1.json()["choices"][0]["message"]["content"]
+        assert "__CRISPLLM_SECRET_" in outbound_requests[0]["messages"][-1]["content"]
+        assert secret not in outbound_requests[0]["messages"][-1]["content"]
+
+        resp2 = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "cloud-model",
+                "messages": [
+                    {"role": "user", "content": f"My secret is {secret}"},
+                    {
+                        "role": "assistant",
+                        "content": f"Acknowledged: {secret}\n```python\nAPI_KEY = \"{secret}\"\n```",
+                    },
+                    {
+                        "role": "user",
+                        "content": f"You must strictly always use {secret} for production",
+                    },
+                ],
+            },
+        )
+        assert resp2.status_code == 200
+
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    facts_rows = cur.execute("SELECT id, session_id, kind, key, value FROM facts").fetchall()
+    fts_rows = cur.execute("SELECT fact_id, session_id, content FROM memory_fts").fetchall()
+    episode_rows = cur.execute("SELECT id, session_id, summary FROM episodes").fetchall()
+    conn.close()
+
+    for row in facts_rows:
+        for col in row:
+            assert secret not in str(col)
+    for row in fts_rows:
+        for col in row:
+            assert secret not in str(col)
+    for row in episode_rows:
+        for col in row:
+            assert secret not in str(col)
+
+    db_bytes = db_path.read_bytes()
+    assert secret.encode("utf-8") not in db_bytes
+
+
+def test_secret_never_stored_in_memory_sse_streaming_path(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    outbound_requests: list[dict[str, Any]] = []
+
+    class MockStreamTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            req_json = json.loads(request.content.decode("utf-8"))
+            outbound_requests.append(req_json)
+            last_msg = str(req_json.get("messages", [{}])[-1].get("content", ""))
+            chunk1 = json.dumps({"choices": [{"delta": {"content": "Streamed: " + last_msg[:10]}}]})
+            chunk2 = json.dumps({"choices": [{"delta": {"content": last_msg[10:]}}]})
+            body_txt = f"data: {chunk1}\n\ndata: {chunk2}\n\ndata: [DONE]\n\n"
+            return httpx.Response(
+                200,
+                text=body_txt,
+                headers={"content-type": "text/event-stream"},
+            )
+
+    cfg = EdgeMemConfig(
+        host="127.0.0.1",
+        port=8080,
+        model="cloud-model",
+        cloud=CloudUpstreamConfig(
+            enabled=True,
+            base_url="http://mock-cloud-upstream",
+            model="cloud-model",
+        ),
+        routing=RoutingConfig(strategy="cloud_only"),
+        privacy=PrivacyConfig(enabled=True, redact_on_cloud_only=True),
+        memory=MemoryConfig(enabled=True, auto_extract=True, db_path=str(db_path)),
+        security=SecurityConfig(),
+    )
+    application = create_app(cfg)
+    orig_lifespan = application.router.lifespan_context
+
+    @asynccontextmanager
+    async def patched_lifespan(app):
+        async with orig_lifespan(app):
+            old = app.state.edgemem_http_client
+            await old.aclose()
+            app.state.edgemem_http_client = httpx.AsyncClient(
+                transport=MockStreamTransport(),
+                base_url="http://mock-cloud-upstream",
+            )
+            yield
+            await app.state.edgemem_http_client.aclose()
+
+    application.router.lifespan_context = patched_lifespan
+
+    with TestClient(application) as client:
+        secret = "ghp_mygithubtoken12345678901234567890123456"
+        resp1 = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "cloud-model",
+                "stream": True,
+                "messages": [{"role": "user", "content": f"My token is {secret}"}],
+            },
+        )
+        assert resp1.status_code == 200
+        assert secret in resp1.text
+        assert "__CRISPLLM_SECRET_" in outbound_requests[0]["messages"][-1]["content"]
+        assert secret not in outbound_requests[0]["messages"][-1]["content"]
+
+        resp2 = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "cloud-model",
+                "stream": True,
+                "messages": [
+                    {"role": "user", "content": f"My token is {secret}"},
+                    {
+                        "role": "assistant",
+                        "content": f"Streamed token is {secret} in code:\n```python\nGITHUB_TOKEN = \"{secret}\"\n```",
+                    },
+                    {
+                        "role": "user",
+                        "content": f"You must strictly always use token {secret}",
+                    },
+                ],
+            },
+        )
+        assert resp2.status_code == 200
+
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    facts_rows = cur.execute("SELECT id, session_id, kind, key, value FROM facts").fetchall()
+    fts_rows = cur.execute("SELECT fact_id, session_id, content FROM memory_fts").fetchall()
+    episode_rows = cur.execute("SELECT id, session_id, summary FROM episodes").fetchall()
+    conn.close()
+
+    for row in facts_rows:
+        for col in row:
+            assert secret not in str(col)
+    for row in fts_rows:
+        for col in row:
+            assert secret not in str(col)
+    for row in episode_rows:
+        for col in row:
+            assert secret not in str(col)
+
+    db_bytes = db_path.read_bytes()
+    assert secret.encode("utf-8") not in db_bytes
+

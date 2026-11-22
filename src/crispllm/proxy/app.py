@@ -345,15 +345,6 @@ def create_app(cfg: CrispLLMConfig | None = None) -> FastAPI:
 
         cfg = load_config()
 
-    memory_store = MemoryStore(cfg.memory.db_path)
-    telemetry_store = TelemetryStore(cfg.memory.db_path)
-    memory_middleware = MemoryMiddleware(memory_store, cfg.memory)
-    watchdog = RamPressureWatchdog(cfg.resources)
-    budgeter = ContextBudgeter(cfg)
-    router = HybridRouter(cfg, budgeter=budgeter, watchdog=watchdog)
-    unloader = IdleUnloadWorker(cfg, http_client=None)
-    pred_engine = PredictedOutputsEngine(cfg.speculative)
-    spec_stats = SpeculativeStats()
     redaction_config = RedactionConfig(
         enabled=cfg.privacy.enabled,
         redact_secrets=cfg.privacy.redact_secrets,
@@ -362,6 +353,15 @@ def create_app(cfg: CrispLLMConfig | None = None) -> FastAPI:
         extra_patterns=tuple(cfg.privacy.extra_patterns),
     )
     redactor = SecretRedactor(redaction_config)
+    memory_store = MemoryStore(cfg.memory.db_path)
+    telemetry_store = TelemetryStore(cfg.memory.db_path)
+    memory_middleware = MemoryMiddleware(memory_store, cfg.memory, redactor=redactor)
+    watchdog = RamPressureWatchdog(cfg.resources)
+    budgeter = ContextBudgeter(cfg)
+    router = HybridRouter(cfg, budgeter=budgeter, watchdog=watchdog)
+    unloader = IdleUnloadWorker(cfg, http_client=None)
+    pred_engine = PredictedOutputsEngine(cfg.speculative)
+    spec_stats = SpeculativeStats()
     counters = ProxyCounters()
 
     consolidator = MemoryConsolidator(store=memory_store, config=cfg)

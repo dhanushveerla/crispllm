@@ -486,12 +486,10 @@ def test_mcp_endpoint_initialize(client):
     assert resp.status_code == 200, f"MCP init failed: {resp.status_code} {resp.text}"
     init_data = resp.json()
     assert init_data.get("result", {}).get("serverInfo", {}).get("name") in ("CrispLLM", "EdgeMem")
-    assert init_data.get("result", {}).get("serverInfo", {}).get("version") == "1.1.0"
+    assert init_data.get("result", {}).get("serverInfo", {}).get("version") == "1.1.1"
 
-    # Get session ID from response header for subsequent requests
     session_id = resp.headers.get("mcp-session-id")
 
-    # Send initialized notification
     initialized_notif = {
         "jsonrpc": "2.0",
         "method": "notifications/initialized",

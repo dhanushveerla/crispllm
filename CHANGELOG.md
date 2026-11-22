@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-11-23
+
+### Fixed
+- **PyPI PEP 740 Provenance Attestations**: Updated GitHub Actions publishing workflow (`.github/workflows/publish.yml`) to use `pypa/gh-action-pypi-publish@release/v1` with `attestations: true` and OIDC trusted publishing, ensuring PyPI displays verified digital provenance on releases.
+- **Secret-Into-Memory Isolation Gate**: Enforced that `MemoryMiddleware` redacts messages before invoking fact and constraint extraction (`extract_facts_from_messages`). Sanitized secrets and placeholders are blocked from entering SQLite tables (`facts`, `episodes`, `memory_fts`) across both non-streaming JSON and SSE streaming lifecycles.
+- **Darwin Memory Mock Isolation**: Isolated cached total RAM global in `get_system_memory_info()` to ensure deterministic test execution across Linux, macOS, and Windows CI runners.
+
+### Added
+- **Security Policy (`SECURITY.md`)**: Published supported version lifecycle (`1.1.x`), private vulnerability reporting instructions, and explicit guarantees/limitations of the privacy redaction model.
+- **Competitive Comparison Matrix**: Added an honest architectural comparison in `README.md` contrasting CrispLLM against Mem0, Letta (MemGPT), and Aider, clarifying memory tradeoffs (low RAM vs. vector fuzzy search).
+
+### Changed
+- Bumped package version to `1.1.1`.
+- Added inline sample sizes (`n=3`, `n=20`) and hardware tier context to all empirical benchmark tables in `README.md`.
+- Documented deprecation of legacy `EdgeMem` compatibility shims scheduled for removal in `v1.3.0`.
+
 ## [1.1.0] - 2026-11-22
 
 ### Added

@@ -3,11 +3,11 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/dhanushveerla/crispllm/actions/workflows/ci.yml/badge.svg)](https://github.com/dhanushveerla/crispllm/actions/workflows/ci.yml)
-[![PyPI version](https://img.shields.io/badge/pypi-v1.1.0-orange.svg)](https://pypi.org/project/crispllm/)
+[![PyPI version](https://img.shields.io/badge/pypi-v1.1.1-orange.svg)](https://pypi.org/project/crispllm/)
 
 > **Local-first LLM memory, AST slicing, RAM-aware routing, and speculative decoding proxy built for 8 GB laptops (Linux, macOS, Windows).**
 
-CrispLLM is a lightweight, zero-bloat OpenAI-compatible `/v1` proxy and Model Context Protocol (MCP) server. It equips local coding models (`llama-server`, Ollama, vLLM) and cloud APIs with tiered architectural memory, 1-hop AST symbol slicing, dynamic context budgeting, and speculative acceleration — maintaining a **steady-state proxy RSS under 85 MB with zero vector databases, zero embedding models, and zero extra LLM calls** on the request hot path.
+CrispLLM is a lightweight, zero-bloat OpenAI-compatible `/v1` proxy and Model Context Protocol (MCP) server. It equips local coding models (`llama-server`, Ollama, vLLM) and cloud APIs with tiered architectural memory, 1-hop AST symbol slicing, dynamic context budgeting, and speculative acceleration — maintaining a **steady-state proxy RSS under 85 MB with zero vector databases and zero embedding models in the SQLite FTS5 memory tier, 0 MB extra RAM for `ngram-simple` speculative decoding, and zero extra LLM calls on the routing/extraction hot path**.
 
 ---
 
@@ -66,6 +66,21 @@ print(response.choices[0].message.content)
 
 ---
 
+## How CrispLLM Compares
+
+| Feature / Tradeoff | CrispLLM | Mem0 | Letta (MemGPT) | Aider |
+|---|---|---|---|---|
+| **Primary Form** | Transparent `/v1` proxy & MCP server | Python memory library / service | Autonomous stateful agent framework | Git-integrated terminal coding agent |
+| **Proxy RSS Footprint** | **< 85 MB RSS** (steady-state) | ~500 MB – 1.5 GB+ (with embeddings/services) | ~500 MB – 1 GB+ (server + agent state) | Variable (in-process client) |
+| **Memory Storage Tier** | SQLite WAL + BM25 FTS5 + Recency decay | Vector DB (Qdrant / Chroma / Pinecone) + Graph | Vector DB + SQLite / Postgres agent state | In-session chat history + repo map |
+| **Semantic Recall** | Exact keyword & BM25 lexical (no fuzzy vector search) | Full vector embedding semantic search | Vector embedding semantic search | PageRank over AST symbols |
+| **Hot-Path Overhead** | 0 embedding models, 0 extra LLM calls (< 2 ms) | LLM/embedding call on every extraction | LLM calls on memory reads/writes/decisions | In-process AST parsing via Tree-sitter |
+| **Local Speculative Acceleration** | Built-in llama.cpp presets (`ngram-simple`, 0 MB RAM) | None | None | None |
+| **Hardware Fit** | **8 GB laptops (CPU / Vulkan / GPU)** | Cloud or >= 16 GB workstations | Cloud or >= 16 GB workstations | Any laptop (calls cloud/local models) |
+| **Key Tradeoff** | **Fast, deterministic, low-RAM; cannot do semantic/fuzzy vector recall** | Rich semantic vector recall; requires external vector DB & embeddings | Full autonomous agent control; high latency & memory overhead | Full-repo AST editing; lacks cross-session proxy memory & speculative engine |
+
+---
+
 ## Architecture
 
 ```mermaid
@@ -110,7 +125,10 @@ All metrics measured empirically on physical test hardware using `bench/run_benc
 - **Operating System:** Windows 11 Home 64-bit (build 26100)
 - **Model Checkpoint:** `Qwen2.5-Coder-3B Q4_K_M` (GGUF)
 
-### Table 1: Memory Ceiling & Active RAM Reduction (Phase 1.1.2)
+> [!NOTE]
+> **Hardware Calibration Note:** `T1-CPU` benchmarks are measured on a 2-thread-capped Intel Core i5-12450HX simulation on Windows 11. This processor provides more L3 cache and higher per-core boost frequencies than native entry-level dual-core chips (such as budget Celeron or Pentium processors), which may exhibit lower throughput.
+
+### Table 1: Memory Ceiling & Active RAM Reduction (Phase 1.1.2 — Hardware Tier: Lenovo LOQ 83FQ, 7.7 GB Usable DDR5)
 
 Target budget: total system peak RSS `<= 3.0 GB` on 8 GB laptops, keeping `>= 800 MB` free for OS and IDE buffers.
 
@@ -121,9 +139,9 @@ Target budget: total system peak RSS `<= 3.0 GB` on 8 GB laptops, keeping `>= 80
 | **T2-Vulkan (Arc A530M Offload)** | **Arc A530M (Vulkan)** | **4096** | **2,174.2 MB** | **1.82 GB VRAM used** | **81.2 MB** |
 | **Steady-State Idle (Post-Unload)** | **Background Worker** | — | **Baseline Restored** | **Fully Reclaimed (2.1s)** | **79.7 MB** |
 
-### Table 2: Prefix-Cache Multi-Turn TTFT & AST Slicing (Phase 1.1.3)
+### Table 2: Prefix-Cache Multi-Turn TTFT & AST Slicing (Phase 1.1.3 — Hardware Tier: Lenovo LOQ 83FQ, n=3 Turns)
 
-Multi-turn latency reduction via byte-stable system prompt ordering and 1-hop AST call-graph extraction.
+Multi-turn latency reduction via byte-stable system prompt ordering and 1-hop AST call-graph extraction on the CrispLLM repository.
 
 | Measurement Dimension | Baseline Turn 1 | Cached Turn 2+ | Improvement / Delta | Cache Evidence |
 |---|---|---|---|---|
@@ -131,9 +149,9 @@ Multi-turn latency reduction via byte-stable system prompt ordering and 1-hop AS
 | **T2-Vulkan Multi-Turn TTFT** | 2,469.5 ms | **773.4 ms** | **3.19x speedup (-68.7%)** | `cache_n` 139 -> 812 tokens (3/3 hits) |
 | **1-Hop AST Slicer (`slice_symbol`)** | 240,660 tokens (full repo) | **800 tokens** (symbol slice) | **99.7% token reduction** | **47 ms warm lookup**, 0 false callees |
 
-### Table 3: Zero-RAM Local Speculative Decode (Phase 1.1.4)
+### Table 3: Zero-RAM Local Speculative Decode (Phase 1.1.4 — Hardware Tier: Lenovo LOQ 83FQ, n=3 Code-Edit Tasks)
 
-Evaluation on `n=3` deterministic code-edit tasks (`temperature=0.0`, `max_tokens=512`) using current `llama-server` `b12631+` preset engine.
+Evaluation on `n=3` deterministic code-edit tasks (`temperature=0.0`, `max_tokens=512`) using current `llama-server` `b12631+` preset engine (0 MB extra RAM for `ngram-simple` speculative decoding).
 
 | Hardware Target | Preset Engine | Generation Speed | Wall-Clock Time | Wall Reduction | Draft Acceptance | Extra RAM |
 |---|---|---|---|---|---|---|
@@ -143,6 +161,16 @@ Evaluation on `n=3` deterministic code-edit tasks (`temperature=0.0`, `max_token
 | **T2-Vulkan (`Arc A530M`)** | Baseline (`none`) | 29.02 tok/s | 15,342.7 ms | — | — | 0 MB |
 | **T2-Vulkan (`Arc A530M`)** | `ngram-simple` | **82.52 tok/s** | **6,264.5 ms** | **-59.2% (2.84x)** | **84.3%** (1,001 / 1,188) | **0 MB** |
 | **T2-Vulkan (`Arc A530M`)** | `ngram-mod` | 77.30 tok/s | 6,574.7 ms | -57.1% (2.66x) | 85.0% (963 / 1,133) | 16 MB |
+
+### Table 4: Long-Context Stress & Multi-Turn Benchmark (Phase 1.1.5 — n=20 Deterministic Tasks)
+
+Long-context stress evaluation across 4 balanced categories (`constraint_retention`, `contradiction_update`, `noisy_distractor`, `cross_turn_synthesis`; 5 tasks each, ~7.2k tokens/task).
+
+| Benchmark Suite & Hardware Target | Sample Size | Category Breakdown | Raw Baseline Pass@1 | CrispLLM Pass@1 | Delta / Pass Gain | Prompt Tokens Delta |
+|---|---|---|---|---|---|---|
+| **Standard Suite** (Nvidia Nemotron 3.5 Bolt) | `n=20` tasks | 10 exact-fact + 10 continuity | 75.0% (15/20) | **80.0%** (16/20) | **+5.0 pp** (+6.7% rel) | — |
+| **Stress Suite** (Cloud Qwen2.5-Coder-3B) | `n=6` multi-turn (~7.2k tok/task) | 4 balanced categories | 16.7% (1/6) | **50.0%** (3/6) | **3.0x (+33.3 pp)** | **-87.9%** (43,099 -> 5,195) |
+| **Stress Suite Expansion** (Deterministic offline) | `n=20` tasks (5 per category) | 4 categories, 5 tasks each | Reference 100% / Empty 0% | Deterministic verification | 4 balanced categories | Validated offline via `--dry-run` |
 
 *Reproduce via:* `python bench/run_bench.py --tasks-file bench/stress_tasks.json --dry-run` or generate optimized llama.cpp server commands with `crispllm llama-cmd --profile t2-vulkan --preset ngram-simple`.
 
@@ -170,6 +198,9 @@ CrispLLM is engineered specifically for local execution on resource-constrained 
 - **Zero-LLM Heuristic Classification:** Request task tiers (`fast`, `balanced`, `deep`) are assigned via deterministic lexical heuristics in < 0.1 ms. While fast and zero-cost, heuristics cannot infer semantic intent on ambiguous, unformatted user turns.
 - **Speculative Decoding Scope:** The zero-RAM `ngram-simple` preset accelerates repetitive syntax, boilerplate, and code edits (84%+ draft acceptance). For open-ended creative writing or novel greenfield prose, draft acceptance decreases.
 - **Cloud Predicted Outputs Availability:** Cloud predicted outputs require a supporting provider endpoint (e.g. OpenAI). When a provider rejects prediction parameters with HTTP 400/422, CrispLLM automatically fails open, strips the prediction payload, and retries the request without failing the user turn.
+
+> [!WARNING]
+> **Deprecation Notice:** Legacy `EdgeMem` compatibility shims (`edgemem.toml` configuration fallback, `X-EdgeMem-*` response headers, and `edgemem_*` MCP tool names) are provided for backward compatibility with v1.0 clients. They are deprecated and scheduled for complete removal in `v1.3.0`. Migrate to `crispllm.toml`, `X-CrispLLM-*` headers, and `crispllm_*` MCP tools.
 
 ---
 
