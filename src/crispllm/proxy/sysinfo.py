@@ -111,22 +111,25 @@ def _get_windows_system_memory(kernel32: Any = None) -> SystemMemoryInfo | None:
         return None
 
 
-def _get_darwin_system_memory() -> SystemMemoryInfo | None:
+def _get_darwin_system_memory(total_mem_bytes: int | None = None) -> SystemMemoryInfo | None:
     global _DARWIN_TOTAL_MEM_BYTES
     try:
-        if _DARWIN_TOTAL_MEM_BYTES is None:
-            res = subprocess.run(
-                ["sysctl", "-n", "hw.memsize"],
-                timeout=1.5,
-                capture_output=True,
-                text=True,
-            )
-            if res.returncode == 0 and res.stdout.strip():
-                _DARWIN_TOTAL_MEM_BYTES = int(res.stdout.strip())
-            else:
-                return None
+        if total_mem_bytes is not None:
+            total_bytes = total_mem_bytes
+        else:
+            if _DARWIN_TOTAL_MEM_BYTES is None:
+                res = subprocess.run(
+                    ["sysctl", "-n", "hw.memsize"],
+                    timeout=1.5,
+                    capture_output=True,
+                    text=True,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    _DARWIN_TOTAL_MEM_BYTES = int(res.stdout.strip())
+                else:
+                    return None
+            total_bytes = _DARWIN_TOTAL_MEM_BYTES
 
-        total_bytes = _DARWIN_TOTAL_MEM_BYTES
         vm_res = subprocess.run(
             ["vm_stat"],
             timeout=1.5,
@@ -171,7 +174,9 @@ def _get_darwin_system_memory() -> SystemMemoryInfo | None:
         return None
 
 
-def get_system_memory_info(kernel32: Any = None) -> SystemMemoryInfo | None:
+def get_system_memory_info(
+    kernel32: Any = None, total_mem_bytes: int | None = None
+) -> SystemMemoryInfo | None:
     try:
         plat = sys.platform
         if plat.startswith("linux"):
@@ -179,7 +184,7 @@ def get_system_memory_info(kernel32: Any = None) -> SystemMemoryInfo | None:
         if plat == "win32":
             return _get_windows_system_memory(kernel32=kernel32)
         if plat == "darwin":
-            return _get_darwin_system_memory()
+            return _get_darwin_system_memory(total_mem_bytes=total_mem_bytes)
         return None
     except Exception:
         return None

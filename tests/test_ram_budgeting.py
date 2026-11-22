@@ -102,27 +102,28 @@ def test_sysinfo_darwin_vm_stat() -> None:
     )
 
     with patch("sys.platform", "darwin"):
-        with patch("subprocess.run") as mock_run:
-            mock_sysctl = MagicMock()
-            mock_sysctl.returncode = 0
-            mock_sysctl.stdout = "8589934592\n"
+        with patch("crispllm.proxy.sysinfo._DARWIN_TOTAL_MEM_BYTES", None):
+            with patch("subprocess.run") as mock_run:
+                mock_sysctl = MagicMock()
+                mock_sysctl.returncode = 0
+                mock_sysctl.stdout = "8589934592\n"
 
-            mock_vm = MagicMock()
-            mock_vm.returncode = 0
-            mock_vm.stdout = vm_stat_output
+                mock_vm = MagicMock()
+                mock_vm.returncode = 0
+                mock_vm.stdout = vm_stat_output
 
-            def side_effect(cmd: list[str], **kwargs: Any) -> MagicMock:
-                if "sysctl" in cmd:
-                    return mock_sysctl
-                return mock_vm
+                def side_effect(cmd: list[str], **kwargs: Any) -> MagicMock:
+                    if any("sysctl" in str(arg) for arg in cmd):
+                        return mock_sysctl
+                    return mock_vm
 
-            mock_run.side_effect = side_effect
-            info = get_system_memory_info()
-            assert info is not None
-            assert info.total_mb == 8192.0
-            expected_avail = (200000 * 4096) / (1024.0 * 1024.0)
-            assert info.available_mb == pytest.approx(expected_avail, rel=1e-3)
-            assert info.source == "darwin_vm_stat"
+                mock_run.side_effect = side_effect
+                info = get_system_memory_info()
+                assert info is not None
+                assert info.total_mb == 8192.0
+                expected_avail = (200000 * 4096) / (1024.0 * 1024.0)
+                assert info.available_mb == pytest.approx(expected_avail, rel=1e-3)
+                assert info.source == "darwin_vm_stat"
 
 
 def test_sysinfo_fail_open_returns_none() -> None:
