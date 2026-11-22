@@ -10,14 +10,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from edgemem.cli import cli
-from edgemem.memory.store import MemoryStore
-from edgemem.proxy.mcp_server import is_within_allowed_roots
-from edgemem.proxy.sysinfo import PROCESS_MEMORY_COUNTERS, _get_windows_process_rss_mb, get_process_rss_mb
-from edgemem.proxy.telemetry import TelemetryStore
-from edgemem.slicer.cache import OutlineCache, TagCache
-from edgemem.slicer.repomap import RepoMap
-from edgemem.slicer.tags import Tag, extract_tags
+from crispllm.cli import cli
+from crispllm.memory.store import MemoryStore
+from crispllm.proxy.mcp_server import is_within_allowed_roots
+from crispllm.proxy.sysinfo import PROCESS_MEMORY_COUNTERS, _get_windows_process_rss_mb, get_process_rss_mb
+from crispllm.proxy.telemetry import TelemetryStore
+from crispllm.slicer.cache import OutlineCache, TagCache
+from crispllm.slicer.repomap import RepoMap
+from crispllm.slicer.tags import Tag, extract_tags
 
 
 def test_process_memory_counters_struct_fields():

@@ -15,18 +15,18 @@ import pytest
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
-from edgemem.cli import cli
-from edgemem.config import EdgeMemConfig, MemoryConfig
-from edgemem.memory.consolidator import (
+from crispllm.cli import cli
+from crispllm.config import EdgeMemConfig, MemoryConfig
+from crispllm.memory.consolidator import (
     ConsolidationReport,
     ConsolidationWorker,
     MemoryConsolidator,
     _lexical_similarity,
 )
-from edgemem.memory.store import Fact, MemoryStore, compute_effective_salience
-from edgemem.proxy.app import create_app
-from edgemem.proxy.mcp_server import create_mcp_server
-from edgemem.proxy.middleware import MemoryMiddleware
+from crispllm.memory.store import Fact, MemoryStore, compute_effective_salience
+from crispllm.proxy.app import create_app
+from crispllm.proxy.mcp_server import create_mcp_server
+from crispllm.proxy.middleware import MemoryMiddleware
 
 
 def test_legacy_v1_schema_migration_and_consolidation_runs(tmp_path: Path):

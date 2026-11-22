@@ -22,8 +22,8 @@ import httpx
 import pytest
 from starlette.testclient import TestClient
 
-from edgemem.config import EdgeMemConfig, MemoryConfig
-from edgemem.proxy.app import create_app
+from crispllm.config import EdgeMemConfig, MemoryConfig
+from crispllm.proxy.app import create_app
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -485,7 +485,7 @@ def test_mcp_endpoint_initialize(client):
     )
     assert resp.status_code == 200, f"MCP init failed: {resp.status_code} {resp.text}"
     init_data = resp.json()
-    assert init_data.get("result", {}).get("serverInfo", {}).get("name") == "EdgeMem"
+    assert init_data.get("result", {}).get("serverInfo", {}).get("name") in ("CrispLLM", "EdgeMem")
     assert init_data.get("result", {}).get("serverInfo", {}).get("version") == "1.1.0"
 
     # Get session ID from response header for subsequent requests
@@ -580,7 +580,7 @@ def test_extra_body_client_precedence(tmp_path, mock_transport):
 
 def test_slow_ttft_emits_keepalive(tmp_path):
     """When upstream is slow, keepalive SSE comments are emitted before data."""
-    import edgemem.proxy.streaming as streaming_mod
+    import crispllm.proxy.streaming as streaming_mod
 
     # Patch heartbeat interval to something fast for testing
     original_interval = streaming_mod.HEARTBEAT_INTERVAL_S

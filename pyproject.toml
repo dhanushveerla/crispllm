@@ -1,5 +1,5 @@
 [project]
-name = "edgemem-proxy"
+name = "crispllm"
 version = "1.1.0"
 description = "Lightweight unified memory & context proxy for AI coding on weak hardware"
 readme = "README.md"
@@ -50,22 +50,21 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/dhanushveerla/edgemem"
-Repository = "https://github.com/dhanushveerla/edgemem"
-Documentation = "https://github.com/dhanushveerla/edgemem#readme"
-"Bug Tracker" = "https://github.com/dhanushveerla/edgemem/issues"
-Changelog = "https://github.com/dhanushveerla/edgemem/blob/master/CHANGELOG.md"
+Homepage = "https://github.com/dhanushveerla/crispllm"
+Repository = "https://github.com/dhanushveerla/crispllm"
+Documentation = "https://github.com/dhanushveerla/crispllm#readme"
+"Bug Tracker" = "https://github.com/dhanushveerla/crispllm/issues"
+Changelog = "https://github.com/dhanushveerla/crispllm/blob/master/CHANGELOG.md"
 
 [project.scripts]
-edgemem = "edgemem.cli:cli"
-edgemem-proxy = "edgemem.cli:cli"
+crispllm = "crispllm.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.7,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "edgemem"
+module-name = "crispllm"
 
 [dependency-groups]
 dev = [

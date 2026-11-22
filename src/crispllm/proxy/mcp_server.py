@@ -1,4 +1,4 @@
-"""Embedded MCP server for EdgeMem.
+"""Embedded MCP server for CrispLLM.
 
 Exposes MCP tools via Streamable HTTP at POST /mcp,
 composed inside the FastAPI app's lifespan.
@@ -14,11 +14,11 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 from starlette.applications import Starlette
 
-from edgemem import __version__
+from crispllm import __version__
 
 if TYPE_CHECKING:
-    from edgemem.memory.store import MemoryStore
-    from edgemem.proxy.telemetry import TelemetryLogger
+    from crispllm.memory.store import MemoryStore
+    from crispllm.proxy.telemetry import TelemetryLogger
 
 READ_ONLY_ANNOTATIONS = ToolAnnotations(
     readOnlyHint=True,
@@ -72,7 +72,7 @@ def create_mcp_server(
     config: Any = None,
 ) -> MCPServer:
     """Create the MCPServer instance with EdgeMem tools registered."""
-    mcp = MCPServer("EdgeMem", version=__version__)
+    mcp = MCPServer("CrispLLM", version=__version__)
 
     _telemetry_ref: dict[str, Any] = {"logger": None, "config": config}
     _memory_ref: dict[str, Any] = {"store": memory_store}
@@ -87,20 +87,25 @@ def create_mcp_server(
 
     def _get_store() -> MemoryStore:
         if _memory_ref["store"] is None:
-            from edgemem.memory.store import MemoryStore
+            from crispllm.memory.store import MemoryStore
 
             _memory_ref["store"] = MemoryStore()
         return _memory_ref["store"]
 
+    setattr(mcp, "_crispllm_set_telemetry", set_telemetry)
     setattr(mcp, "_edgemem_set_telemetry", set_telemetry)
+    setattr(mcp, "_crispllm_telemetry_ref", _telemetry_ref)
     setattr(mcp, "_edgemem_telemetry_ref", _telemetry_ref)
+    setattr(mcp, "_crispllm_set_memory", set_memory)
     setattr(mcp, "_edgemem_set_memory", set_memory)
+    setattr(mcp, "_crispllm_memory_ref", _memory_ref)
     setattr(mcp, "_edgemem_memory_ref", _memory_ref)
 
-    @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-    async def edgemem_status() -> dict:
-        """Return EdgeMem proxy status: RSS, upstream target, and recent telemetry."""
-        from edgemem.proxy.telemetry import get_rss_mb
+    @mcp.tool(name="crispllm_status", annotations=READ_ONLY_ANNOTATIONS)
+    @mcp.tool(name="edgemem_status", annotations=READ_ONLY_ANNOTATIONS)
+    async def crispllm_status() -> dict:
+        """Return CrispLLM proxy status: RSS, upstream target, and recent telemetry."""
+        from crispllm.proxy.telemetry import get_rss_mb
 
         ref = _telemetry_ref
         config = ref.get("config")
@@ -117,10 +122,11 @@ def create_mcp_server(
             result["telemetry_summary"] = {"note": "telemetry not initialized"}
         return result
 
-    @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-    async def edgemem_ping(message: str) -> dict:
-        """Ping the EdgeMem proxy. Echoes the message back with status info."""
-        from edgemem.proxy.telemetry import get_rss_mb
+    @mcp.tool(name="crispllm_ping", annotations=READ_ONLY_ANNOTATIONS)
+    @mcp.tool(name="edgemem_ping", annotations=READ_ONLY_ANNOTATIONS)
+    async def crispllm_ping(message: str) -> dict:
+        """Ping the CrispLLM proxy. Echoes the message back with status info."""
+        from crispllm.proxy.telemetry import get_rss_mb
 
         return {
             "echo": message,
@@ -128,8 +134,9 @@ def create_mcp_server(
             "proxy_rss_mb": round(get_rss_mb(), 2),
         }
 
-    @mcp.tool(annotations=ADDITIVE_ANNOTATIONS)
-    async def edgemem_remember(
+    @mcp.tool(name="crispllm_remember", annotations=ADDITIVE_ANNOTATIONS)
+    @mcp.tool(name="edgemem_remember", annotations=ADDITIVE_ANNOTATIONS)
+    async def crispllm_remember(
         key: str,
         value: str,
         kind: str = "note",
@@ -137,7 +144,7 @@ def create_mcp_server(
         pinned: bool = True,
         tier: str = "episodic",
     ) -> dict:
-        """Store a fact, constraint, or note in EdgeMem tiered memory.
+        """Store a fact, constraint, or note in CrispLLM tiered memory.
 
         Args:
             key: Unique identifier/name for the fact (e.g. constant name or constraint topic).
@@ -166,11 +173,12 @@ def create_mcp_server(
         )
         return {"status": "ok", "fact_id": fid, "key": key}
 
-    @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-    async def edgemem_recall(
+    @mcp.tool(name="crispllm_recall", annotations=READ_ONLY_ANNOTATIONS)
+    @mcp.tool(name="edgemem_recall", annotations=READ_ONLY_ANNOTATIONS)
+    async def crispllm_recall(
         query: str, limit: int = 8, include_archival: bool = False
     ) -> dict:
-        """Search EdgeMem memory for relevant facts using BM25 FTS5 ranking.
+        """Search CrispLLM memory for relevant facts using BM25 FTS5 ranking.
 
         Args:
             query: Search query or prompt.
@@ -199,14 +207,15 @@ def create_mcp_server(
             ],
         }
 
-    @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-    async def edgemem_list_facts(
+    @mcp.tool(name="crispllm_list_facts", annotations=READ_ONLY_ANNOTATIONS)
+    @mcp.tool(name="edgemem_list_facts", annotations=READ_ONLY_ANNOTATIONS)
+    async def crispllm_list_facts(
         kind: str | None = None,
         limit: int = 20,
         tier: str | None = None,
         include_archival: bool = False,
     ) -> dict:
-        """List stored facts in EdgeMem memory.
+        """List stored facts in CrispLLM memory.
 
         Args:
             kind: Optional filter by kind: 'constraint', 'constant', 'signature', 'decision', 'note'.
@@ -235,9 +244,10 @@ def create_mcp_server(
             ]
         }
 
-    @mcp.tool(annotations=DESTRUCTIVE_ANNOTATIONS)
-    async def edgemem_forget(fact_id: int) -> dict:
-        """Delete a fact from EdgeMem memory by its ID.
+    @mcp.tool(name="crispllm_forget", annotations=DESTRUCTIVE_ANNOTATIONS)
+    @mcp.tool(name="edgemem_forget", annotations=DESTRUCTIVE_ANNOTATIONS)
+    async def crispllm_forget(fact_id: int) -> dict:
+        """Delete a fact from CrispLLM memory by its ID.
 
         Args:
             fact_id: The integer ID of the fact to remove.
@@ -246,8 +256,9 @@ def create_mcp_server(
         deleted = store.delete_fact(fact_id)
         return {"status": "ok" if deleted else "not_found", "fact_id": fact_id}
 
-    @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-    async def edgemem_repo_map(
+    @mcp.tool(name="crispllm_repo_map", annotations=READ_ONLY_ANNOTATIONS)
+    @mcp.tool(name="edgemem_repo_map", annotations=READ_ONLY_ANNOTATIONS)
+    async def crispllm_repo_map(
         repo_path: str,
         max_tokens: int = 1024,
         query: str = "",
@@ -277,7 +288,7 @@ def create_mcp_server(
         import time
         from pathlib import Path
 
-        from edgemem.slicer.repomap import RepoMap, count_tokens
+        from crispllm.slicer.repomap import RepoMap, count_tokens
 
         config = _telemetry_ref.get("config")
         allowed_roots: list[str] = getattr(
@@ -338,8 +349,9 @@ def create_mcp_server(
         finally:
             rm.close()
 
-    @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-    async def edgemem_file_outline(file_path: str) -> dict:
+    @mcp.tool(name="crispllm_file_outline", annotations=READ_ONLY_ANNOTATIONS)
+    @mcp.tool(name="edgemem_file_outline", annotations=READ_ONLY_ANNOTATIONS)
+    async def crispllm_file_outline(file_path: str) -> dict:
         """Return the AST skeleton (class and function signatures) of a single file.
 
         Uses grep-ast TreeContext for supported languages with a regex fallback
@@ -356,8 +368,8 @@ def create_mcp_server(
         """
         from pathlib import Path
 
-        from edgemem.slicer.repomap import file_outline
-        from edgemem.slicer.tags import _lang_for_path
+        from crispllm.slicer.repomap import file_outline
+        from crispllm.slicer.tags import _lang_for_path
 
         config = _telemetry_ref.get("config")
         allowed_roots: list[str] = getattr(

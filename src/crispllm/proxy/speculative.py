@@ -9,8 +9,8 @@ import threading
 import time
 from typing import Any, Callable
 
-from edgemem.config import SpeculativeConfig
-from edgemem.proxy.watchdog import RamPressureWatchdog
+from crispllm.config import SpeculativeConfig
+from crispllm.proxy.watchdog import RamPressureWatchdog
 
 _EDIT_SIGNALS: tuple[str, ...] = (
     "refactor",

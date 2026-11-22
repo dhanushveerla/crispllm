@@ -12,15 +12,17 @@ wheels/
 # Profiling
 *.prof
 
-# EdgeMem local artifacts
+# CrispLLM / EdgeMem local artifacts
 .env
 .edgemem/
+.crispllm/
 *.db
 *.db-wal
 *.db-shm
 *.bin
 *.gguf
 edgemem.toml
+crispllm.toml
 
 # Benchmark result artifacts (commit explicit baseline reports manually)
 bench/results/

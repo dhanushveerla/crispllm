@@ -5,10 +5,10 @@ import os
 from typing import Any, Mapping
 import urllib.parse
 
-from edgemem.config import EdgeMemConfig
-from edgemem.proxy.budgeter import ContextBudgeter, ContextDecision
-from edgemem.proxy.classifier import TaskClassification, TaskClassifier
-from edgemem.proxy.watchdog import RamPressureWatchdog
+from crispllm.config import CrispLLMConfig, EdgeMemConfig
+from crispllm.proxy.budgeter import ContextBudgeter, ContextDecision
+from crispllm.proxy.classifier import TaskClassification, TaskClassifier
+from crispllm.proxy.watchdog import RamPressureWatchdog
 
 
 def is_localhost_url(url: str) -> bool:
@@ -113,7 +113,12 @@ class HybridRouter:
         headers: Mapping[str, str],
         est_prompt_tokens: int,
     ) -> RouteTarget:
-        explicit_task_tier = headers.get("X-EdgeMem-Task-Tier") or headers.get("x-edgemem-task-tier")
+        explicit_task_tier = (
+            headers.get("X-CrispLLM-Task-Tier")
+            or headers.get("x-crispllm-task-tier")
+            or headers.get("X-EdgeMem-Task-Tier")
+            or headers.get("x-edgemem-task-tier")
+        )
         classification = self.classifier.classify(
             messages=body.get("messages", []),
             est_tokens=est_prompt_tokens,
@@ -122,7 +127,12 @@ class HybridRouter:
         )
         active_task_tier = classification.tier
 
-        route_header = headers.get("X-EdgeMem-Route") or headers.get("x-edgemem-route")
+        route_header = (
+            headers.get("X-CrispLLM-Route")
+            or headers.get("x-crispllm-route")
+            or headers.get("X-EdgeMem-Route")
+            or headers.get("x-edgemem-route")
+        )
         if route_header:
             val = route_header.strip().lower()
             if val == "local":

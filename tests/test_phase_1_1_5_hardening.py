@@ -10,19 +10,19 @@ import pytest
 from starlette.testclient import TestClient
 
 from bench.run_bench import run_task, summarize_run_results
-from edgemem.config import EdgeMemConfig, MemoryConfig, ResourcesConfig, SpeculativeConfig
-from edgemem.memory.store import MemoryStore
-from edgemem.proxy.app import create_app
-from edgemem.proxy.classifier import TaskClassification, TaskClassifier
-from edgemem.proxy.middleware import MemoryMiddleware, _get_message_text, estimate_tokens
-from edgemem.proxy.speculative import (
+from crispllm.config import EdgeMemConfig, MemoryConfig, ResourcesConfig, SpeculativeConfig
+from crispllm.memory.store import MemoryStore
+from crispllm.proxy.app import create_app
+from crispllm.proxy.classifier import TaskClassification, TaskClassifier
+from crispllm.proxy.middleware import MemoryMiddleware, _get_message_text, estimate_tokens
+from crispllm.proxy.speculative import (
     PredictedOutputsEngine,
     PredictionDecision,
     SpeculativeStats,
     _extract_text_from_message,
 )
-from edgemem.proxy.streaming import estimate_tokens_from_messages
-from edgemem.proxy.watchdog import RamPressureWatchdog, WatchdogSnapshot
+from crispllm.proxy.streaming import estimate_tokens_from_messages
+from crispllm.proxy.watchdog import RamPressureWatchdog, WatchdogSnapshot
 
 
 class TestStressTasksSuiteExpansion:
@@ -257,9 +257,9 @@ class TestFailOpenChatCompletionsEndpoint:
 class TestVersionSync:
     def test_version_string_and_cli_and_mcp(self):
         from click.testing import CliRunner
-        from edgemem import __version__
-        from edgemem.cli import cli
-        from edgemem.proxy.mcp_server import create_mcp_server
+        from crispllm import __version__
+        from crispllm.cli import cli
+        from crispllm.proxy.mcp_server import create_mcp_server
 
         assert __version__ == "1.1.0"
 
@@ -269,10 +269,10 @@ class TestVersionSync:
         assert "1.1.0" in result.output
 
         mcp = create_mcp_server()
-        assert mcp.name == "EdgeMem"
+        assert mcp.name == "CrispLLM"
         assert mcp.version == "1.1.0"
 
         doctor_res = runner.invoke(cli, ["doctor"])
         assert doctor_res.exit_code == 0
-        assert "EdgeMem Doctor v1.1.0" in doctor_res.output
+        assert "CrispLLM Doctor v1.1.0" in doctor_res.output
         assert "[OK] SQLite FTS5" in doctor_res.output

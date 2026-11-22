@@ -1,7 +1,7 @@
-"""Configuration loading for EdgeMem.
+"""Configuration loading for CrispLLM.
 
-Loads from ./edgemem.toml (project-local) or
-platformdirs.user_config_path("edgemem") / "edgemem.toml" (user-global),
+Loads from ./crispllm.toml (project-local) or
+platformdirs.user_config_path("crispllm") / "crispllm.toml" (user-global),
 with sensible defaults for all values.
 """
 
@@ -19,7 +19,9 @@ import platformdirs
 def _default_config_paths() -> list[Path]:
     """Return ordered list of config file paths to search."""
     return [
+        Path("crispllm.toml"),
         Path("edgemem.toml"),
+        platformdirs.user_config_path("crispllm") / "crispllm.toml",
         platformdirs.user_config_path("edgemem") / "edgemem.toml",
     ]
 
@@ -156,8 +158,8 @@ class SpeculativeConfig:
 
 
 @dataclass
-class EdgeMemConfig:
-    """Full EdgeMem configuration."""
+class CrispLLMConfig:
+    """Full CrispLLM configuration."""
 
     host: str = "127.0.0.1"
     port: int = 8080
@@ -190,10 +192,13 @@ class EdgeMemConfig:
         """Resolved telemetry log directory."""
         if self.telemetry_dir:
             return Path(self.telemetry_dir)
-        return Path(platformdirs.user_data_dir("edgemem"))
+        return Path(platformdirs.user_data_dir("crispllm"))
 
 
-def load_config(path: Path | None = None) -> EdgeMemConfig:
+EdgeMemConfig = CrispLLMConfig
+
+
+def load_config(path: Path | None = None) -> CrispLLMConfig:
     """Load config from TOML file, falling back to defaults."""
     raw: dict[str, Any] = {}
 
@@ -440,16 +445,16 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
         ),
     )
 
-    return EdgeMemConfig(
-        host=server.get("host", EdgeMemConfig.host),
-        port=server.get("port", EdgeMemConfig.port),
+    return CrispLLMConfig(
+        host=server.get("host", CrispLLMConfig.host),
+        port=server.get("port", CrispLLMConfig.port),
         upstream_base_url=upstream.get(
-            "base_url", EdgeMemConfig.upstream_base_url
+            "base_url", CrispLLMConfig.upstream_base_url
         ),
-        api_key_env=upstream.get("api_key_env", EdgeMemConfig.api_key_env),
-        model=upstream.get("model", EdgeMemConfig.model),
+        api_key_env=upstream.get("api_key_env", CrispLLMConfig.api_key_env),
+        model=upstream.get("model", CrispLLMConfig.model),
         extra_body=upstream.get("extra_body", {}),
-        telemetry_dir=telemetry.get("dir", EdgeMemConfig.telemetry_dir),
+        telemetry_dir=telemetry.get("dir", CrispLLMConfig.telemetry_dir),
         memory=memory_cfg,
         cloud=cloud_cfg,
         routing=routing_cfg,
@@ -461,7 +466,7 @@ def load_config(path: Path | None = None) -> EdgeMemConfig:
 
 
 def default_toml_content(preset: str = "hybrid") -> str:
-    """Generate default edgemem.toml content for `edgemem init`."""
+    """Generate default crispllm.toml content for `crispllm init`."""
     preset_lower = preset.lower()
     if preset_lower == "hybrid":
         return """\

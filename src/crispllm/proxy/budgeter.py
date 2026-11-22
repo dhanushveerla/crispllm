@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import urllib.parse
 
-from edgemem.config import EdgeMemConfig
-from edgemem.proxy.watchdog import RamPressureWatchdog
+from crispllm.config import EdgeMemConfig
+from crispllm.proxy.watchdog import RamPressureWatchdog
 
 
 def detect_local_backend(upstream_base_url: str, configured: str = "auto") -> str:

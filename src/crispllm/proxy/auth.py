@@ -4,7 +4,7 @@ import hmac
 import json
 from typing import Any, Awaitable, Callable
 
-from edgemem.config import SecurityConfig
+from crispllm.config import SecurityConfig
 
 TUNNEL_PROXY_HEADERS: frozenset[str] = frozenset({
     "x-forwarded-for",
@@ -14,7 +14,7 @@ TUNNEL_PROXY_HEADERS: frozenset[str] = frozenset({
 })
 
 
-class EdgeMemAuthMiddleware:
+class CrispLLMAuthMiddleware:
     def __init__(self, app: Any, config: SecurityConfig) -> None:
         self.app = app
         self.config = config
@@ -117,3 +117,6 @@ class EdgeMemAuthMiddleware:
             "type": "http.response.body",
             "body": content,
         })
+
+
+EdgeMemAuthMiddleware = CrispLLMAuthMiddleware

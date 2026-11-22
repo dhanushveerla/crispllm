@@ -13,10 +13,10 @@ import httpx
 import pytest
 from starlette.testclient import TestClient
 
-from edgemem.cli import cli
-from edgemem.config import EdgeMemConfig, MemoryConfig
-from edgemem.proxy import middleware
-from edgemem.proxy.app import create_app
+from crispllm.cli import cli
+from crispllm.config import EdgeMemConfig, MemoryConfig
+from crispllm.proxy import middleware
+from crispllm.proxy.app import create_app
 
 MOCK_UPSTREAM_RESPONSE: dict[str, Any] = {
     "id": "chatcmpl-mem-test",
@@ -212,7 +212,7 @@ def test_middle_turn_compaction_shrinks_prompt_tokens(tmp_path: Path) -> None:
     assert "frozen and immutable" in sys_msg
 
     # Verify episodes were recorded in SQLite
-    from edgemem.memory.store import MemoryStore
+    from crispllm.memory.store import MemoryStore
 
     with MemoryStore(cfg.memory.db_path) as store:
         st = store.stats()
@@ -262,7 +262,12 @@ def test_multi_turn_constraint_injection(tmp_path: Path) -> None:
     first_msg = upstream_messages[0]
     assert first_msg["role"] == "system"
     content = first_msg["content"]
-    assert "[EdgeMem Active Memory]" in content or "--- EdgeMem Core Memory ---" in content
+    assert (
+        "[CrispLLM Active Memory]" in content
+        or "--- CrispLLM Core Memory ---" in content
+        or "[EdgeMem Active Memory]" in content
+        or "--- EdgeMem Core Memory ---" in content
+    )
     assert "frozen and strictly immutable" in content
     assert "singleton" in content
     assert "DEFAULT_EXPIRY" in content or "DEFAULT_EXPIRY" in upstream_messages[-1]["content"]
@@ -326,6 +331,7 @@ def test_memory_disabled_forwards_untouched(tmp_path: Path) -> None:
     assert len(upstream_messages) == len(messages)
     for orig, sent in zip(messages, upstream_messages):
         assert orig == sent
+        assert "[CrispLLM Active Memory]" not in sent.get("content", "")
         assert "[EdgeMem Active Memory]" not in sent.get("content", "")
 
 
@@ -480,7 +486,7 @@ db_path = "{db_file.as_posix()}"
         encoding="utf-8",
     )
 
-    from edgemem.memory.store import MemoryStore
+    from crispllm.memory.store import MemoryStore
 
     with MemoryStore(db_file) as store:
         store.upsert_fact("sess_test", "API_TIMEOUT", "60", kind="constant", pinned=True)
@@ -629,14 +635,19 @@ def test_short_conversation_default_config_skips_compaction(tmp_path: Path) -> N
     assert any("Added sanitize_input" in m.get("content", "") for m in sent_messages)
 
     first_content = sent_messages[0]["content"]
-    assert "[EdgeMem Active Memory]" in first_content or "--- EdgeMem Core Memory ---" in first_content
+    assert (
+        "[CrispLLM Active Memory]" in first_content
+        or "--- CrispLLM Core Memory ---" in first_content
+        or "[EdgeMem Active Memory]" in first_content
+        or "--- EdgeMem Core Memory ---" in first_content
+    )
     assert "strictly immutable and frozen" in first_content
 
 
 def test_stress_tasks_compaction_net_token_reduction() -> None:
     """Fast unit test running MemoryMiddleware directly on all 20 stress tasks."""
-    from edgemem.memory.store import MemoryStore
-    from edgemem.proxy.middleware import MemoryMiddleware, _get_message_text, estimate_tokens
+    from crispllm.memory.store import MemoryStore
+    from crispllm.proxy.middleware import MemoryMiddleware, _get_message_text, estimate_tokens
 
     stress_tasks_file = Path(__file__).parent.parent / "bench" / "stress_tasks.json"
     assert stress_tasks_file.exists()

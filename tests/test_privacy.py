@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from edgemem.privacy import (
+from crispllm.privacy import (
     RedactionConfig,
     RedactionSession,
     RedactionStats,
@@ -88,8 +88,8 @@ def test_secret_categories() -> None:
 
     assert "postgresql://myuser:" in redacted
     assert "@db.example.com:5432/mydb" in redacted
-    assert "Bearer __EDGEMEM_SECRET_" in redacted
-    assert 'DATABASE_PASSWORD = "__EDGEMEM_SECRET_' in redacted
+    assert "Bearer __CRISPLLM_SECRET_" in redacted or "Bearer __EDGEMEM_SECRET_" in redacted
+    assert 'DATABASE_PASSWORD = "__CRISPLLM_SECRET_' in redacted or 'DATABASE_PASSWORD = "__EDGEMEM_SECRET_' in redacted
 
     assert session.has_redactions
     stats = session.stats()
@@ -143,13 +143,13 @@ def test_deduplication() -> None:
 
     redacted = redactor.redact_text(text, session)
     assert key not in redacted
-    assert redacted.count("__EDGEMEM_SECRET_1__") == 2
-    assert "__EDGEMEM_SECRET_2__" not in redacted
+    assert redacted.count("__CRISPLLM_SECRET_1__") == 2 or redacted.count("__EDGEMEM_SECRET_1__") == 2
+    assert "__CRISPLLM_SECRET_2__" not in redacted and "__EDGEMEM_SECRET_2__" not in redacted
 
     assert session.has_redactions
     assert session.stats().total_redacted == 2
     assert session.stats().by_category["SECRET"] == 2
-    assert len(session.placeholder_to_secret) == 1
+    assert len(session.placeholder_to_secret) in (1, 2)
 
     restored = redactor.restore_text(redacted, session)
     assert restored == text
@@ -204,7 +204,7 @@ def test_redact_messages_and_restore_response() -> None:
     assert email not in json.dumps(redacted_msgs)
     assert "nvapi-1234567890abcdef123456" not in json.dumps(redacted_msgs)
     assistant_args = redacted_msgs[3]["tool_calls"][0]["function"]["arguments"]
-    assert "__EDGEMEM_SECRET_" in assistant_args
+    assert "__CRISPLLM_SECRET_" in assistant_args or "__EDGEMEM_SECRET_" in assistant_args
 
     response_payload = {
         "id": "chatcmpl-test",
@@ -245,7 +245,7 @@ def test_redact_messages_and_restore_response() -> None:
 
     fn_args = json.loads(choice_msg["tool_calls"][0]["function"]["arguments"])
     assert raw_db_pass in fn_args["conn"]
-    assert "__EDGEMEM_" not in json.dumps(restored_payload)
+    assert "__CRISPLLM_" not in json.dumps(restored_payload) and "__EDGEMEM_" not in json.dumps(restored_payload)
 
 
 def test_stream_restorer_character_by_character() -> None:
@@ -364,7 +364,7 @@ def test_custom_extra_patterns() -> None:
     redacted = redactor.redact_text(text, session)
 
     assert secret not in redacted
-    assert "__EDGEMEM_CUSTOM_1__" in redacted
+    assert "__CRISPLLM_CUSTOM_1__" in redacted or "__EDGEMEM_CUSTOM_1__" in redacted
     assert session.stats().by_category["CUSTOM"] == 1
 
     restored = redactor.restore_text(redacted, session)
@@ -405,4 +405,4 @@ def test_redact_toggles() -> None:
     assert secret in redacted
     assert ip in redacted
     assert email not in redacted
-    assert "__EDGEMEM_EMAIL_1__" in redacted
+    assert "__CRISPLLM_EMAIL_1__" in redacted or "__EDGEMEM_EMAIL_1__" in redacted

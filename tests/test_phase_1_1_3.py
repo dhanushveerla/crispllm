@@ -12,19 +12,19 @@ from click.testing import CliRunner
 import httpx
 from starlette.testclient import TestClient
 
-from edgemem.cli import cli
-from edgemem.config import EdgeMemConfig, MemoryConfig, ResourcesConfig, RoutingConfig, load_config
-from edgemem.memory.store import MemoryStore
-from edgemem.proxy.app import create_app
-from edgemem.proxy.budgeter import ContextBudgeter
-from edgemem.proxy.classifier import TaskClassification, TaskClassifier
-from edgemem.proxy.mcp_server import create_mcp_server
-from edgemem.proxy.middleware import MemoryMiddleware
-from edgemem.proxy.router import HybridRouter, RouteTarget
-from edgemem.proxy.watchdog import RamPressureWatchdog, WatchdogSnapshot
-from edgemem.slicer.cache import TagCache
-from edgemem.slicer.repomap import RepoMap
-from edgemem.slicer.symbols import SymbolDef, SymbolSliceResult, extract_symbols
+from crispllm.cli import cli
+from crispllm.config import EdgeMemConfig, MemoryConfig, ResourcesConfig, RoutingConfig, load_config
+from crispllm.memory.store import MemoryStore
+from crispllm.proxy.app import create_app
+from crispllm.proxy.budgeter import ContextBudgeter
+from crispllm.proxy.classifier import TaskClassification, TaskClassifier
+from crispllm.proxy.mcp_server import create_mcp_server
+from crispllm.proxy.middleware import MemoryMiddleware
+from crispllm.proxy.router import HybridRouter, RouteTarget
+from crispllm.proxy.watchdog import RamPressureWatchdog, WatchdogSnapshot
+from crispllm.slicer.cache import TagCache
+from crispllm.slicer.repomap import RepoMap
+from crispllm.slicer.symbols import SymbolDef, SymbolSliceResult, extract_symbols
 
 
 class MockTransport(httpx.AsyncBaseTransport):
@@ -194,7 +194,7 @@ def test_cli_slice_symbol_flag(tmp_path: Path):
     )
     assert res.exit_code == 0
     assert "TokenManager.create_token" in res.output
-    assert "[EdgeMem slice-symbol]" in res.stderr
+    assert "[CrispLLM slice-symbol]" in res.stderr or "[EdgeMem slice-symbol]" in res.stderr
     assert "symbol='create_token' found=True" in res.stderr
 
 
@@ -336,13 +336,13 @@ def test_prefix_cache_stable_prompt_assembly(tmp_path: Path):
     processed1, _ = middleware.process_request(turn1, {"x-edgemem-session": "s1"})
 
     first_content1 = processed1["messages"][0]["content"]
-    assert "--- EdgeMem Core Memory ---" in first_content1
+    assert "--- CrispLLM Core Memory ---" in first_content1 or "--- EdgeMem Core Memory ---" in first_content1
     assert "Must use Python 3.11+" in first_content1
     assert "Database must be SQLite WAL mode" in first_content1
     assert "dark theme" not in first_content1
 
     user_content1 = processed1["messages"][1]["content"]
-    assert "<edgemem_context>" in user_content1
+    assert "<crispllm_context>" in user_content1 or "<edgemem_context>" in user_content1
     assert "dark theme" in user_content1
 
     turn2 = {
@@ -573,7 +573,7 @@ def test_warm_cache_reuse(tmp_path: Path):
         res1 = rm.slice_symbol("create_token", token_budget=800)
         assert res1.found is True
 
-        with patch("edgemem.slicer.symbols._get_parser") as mock_get_parser:
+        with patch("crispllm.slicer.symbols._get_parser") as mock_get_parser:
             t0 = time.perf_counter()
             res2 = rm.slice_symbol("create_token", token_budget=800)
             elapsed_ms = (time.perf_counter() - t0) * 1000

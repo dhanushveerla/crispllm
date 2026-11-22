@@ -13,7 +13,7 @@ from typing import Iterable
 
 import networkx as nx
 
-from edgemem.slicer.tags import Tag
+from crispllm.slicer.tags import Tag
 
 
 

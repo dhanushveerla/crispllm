@@ -30,24 +30,24 @@ from typing import Any, Sequence
 import tiktoken
 from grep_ast import TreeContext
 
-from edgemem.slicer.cache import OutlineCache, SymbolCache, TagCache
-from edgemem.slicer.pagerank import (
+from crispllm.slicer.cache import OutlineCache, SymbolCache, TagCache
+from crispllm.slicer.pagerank import (
     build_symbol_graph,
     compute_pagerank,
     find_matching_files,
     is_test_file,
     personalise_ranks,
 )
-from edgemem.slicer.symbols import (
+from crispllm.slicer.symbols import (
     GENERIC_CALL_NAMES,
     SymbolDef,
     SymbolSliceResult,
     extract_symbols,
     extract_symbols_and_imports,
 )
-from edgemem.slicer.tags import Tag, extract_tags, scan_repo_files
+from crispllm.slicer.tags import Tag, extract_tags, scan_repo_files
 
-logger = logging.getLogger("edgemem.slicer.repomap")
+logger = logging.getLogger("crispllm.slicer.repomap")
 
 _GRAPH_CACHE: OrderedDict[tuple[str, str], tuple[list[Tag], int, Any, dict[str, float]]] = OrderedDict()
 _MAX_GRAPH_ENTRIES = 4
@@ -99,7 +99,7 @@ def _get_enc(model_name: str = "cl100k_base") -> tiktoken.Encoding:
         if "TIKTOKEN_CACHE_DIR" not in os.environ:
             from platformdirs import user_cache_dir
             for cand in [
-                Path(user_cache_dir("edgemem")) / "tiktoken",
+                Path(user_cache_dir("crispllm")) / "tiktoken",
                 Path.home() / ".cache" / "tiktoken",
                 Path(tempfile.gettempdir()) / "data-gym-cache",
             ]:

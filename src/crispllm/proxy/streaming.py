@@ -18,7 +18,7 @@ from typing import Any
 
 import httpx
 
-logger = logging.getLogger("edgemem.proxy.streaming")
+logger = logging.getLogger("crispllm.proxy.streaming")
 
 HEARTBEAT_INTERVAL_S: float = 10.0
 

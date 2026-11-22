@@ -16,42 +16,42 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from edgemem.config import EdgeMemConfig
-from edgemem.memory.consolidator import ConsolidationWorker, MemoryConsolidator
-from edgemem.memory.store import MemoryStore
-from edgemem.privacy.redactor import (
+from crispllm.config import CrispLLMConfig
+from crispllm.memory.consolidator import ConsolidationWorker, MemoryConsolidator
+from crispllm.memory.store import MemoryStore
+from crispllm.privacy.redactor import (
     RedactionConfig,
     RedactionSession,
     SecretRedactor,
 )
-from edgemem.privacy.stream_restorer import StreamRestorer
-from edgemem.proxy.auth import EdgeMemAuthMiddleware
-from edgemem.proxy.budgeter import ContextBudgeter
-from edgemem.proxy.mcp_server import create_mcp_server, create_mcp_starlette_app
-from edgemem.proxy.middleware import MemoryMiddleware, _get_message_text
-from edgemem.proxy.router import HybridRouter, RouteTarget
-from edgemem.proxy.speculative import (
+from crispllm.privacy.stream_restorer import StreamRestorer
+from crispllm.proxy.auth import CrispLLMAuthMiddleware
+from crispllm.proxy.budgeter import ContextBudgeter
+from crispllm.proxy.mcp_server import create_mcp_server, create_mcp_starlette_app
+from crispllm.proxy.middleware import MemoryMiddleware, _get_message_text
+from crispllm.proxy.router import HybridRouter, RouteTarget
+from crispllm.proxy.speculative import (
     PredictedOutputsEngine,
     PredictionDecision,
     SpeculativeStats,
 )
-from edgemem.proxy.streaming import (
+from crispllm.proxy.streaming import (
     count_output_tokens_from_sse,
     estimate_tokens_from_messages,
     stream_sse_passthrough,
     stream_with_heartbeat,
 )
-from edgemem.proxy.telemetry import (
+from crispllm.proxy.telemetry import (
     RequestTelemetry,
     TelemetryLogger,
     TelemetryStore,
     Timer,
     get_rss_mb,
 )
-from edgemem.proxy.unloader import IdleUnloadWorker
-from edgemem.proxy.watchdog import RamPressureWatchdog
+from crispllm.proxy.unloader import IdleUnloadWorker
+from crispllm.proxy.watchdog import RamPressureWatchdog
 
-logger = logging.getLogger("edgemem.proxy")
+logger = logging.getLogger("crispllm.proxy")
 
 
 class ProxyCounters:
@@ -129,7 +129,7 @@ _SESSION_PREFIX_LOCK = threading.Lock()
 def _format_server_timing(
     proxy_overhead_ms: float, existing_header: str | None = None
 ) -> str:
-    metric = f"edgemem_proxy;dur={proxy_overhead_ms:.2f}"
+    metric = f"crispllm_proxy;dur={proxy_overhead_ms:.2f}, edgemem_proxy;dur={proxy_overhead_ms:.2f}"
     if existing_header:
         return f"{existing_header}, {metric}"
     return metric
@@ -225,7 +225,7 @@ async def _restoring_stream_wrapper(
     choice_restorers: dict[int, StreamRestorer] = {}
     tc_restorers: dict[tuple[int, int], StreamRestorer] = {}
     last_id = "chatcmpl-stream"
-    last_model = "edgemem"
+    last_model = "crispllm"
 
     async for sse_event in raw_stream:
         if not sse_event.startswith("data: "):
@@ -339,9 +339,9 @@ async def _restoring_stream_wrapper(
             yield sse_event
 
 
-def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
+def create_app(cfg: CrispLLMConfig | None = None) -> FastAPI:
     if cfg is None:
-        from edgemem.config import load_config
+        from crispllm.config import load_config
 
         cfg = load_config()
 
@@ -381,24 +381,27 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         )
 
         unloader._http_client = client
-        mcp_server._edgemem_set_telemetry(tel, cfg)
+        if hasattr(mcp_server, "_crispllm_set_telemetry"):
+            mcp_server._crispllm_set_telemetry(tel, cfg)
+        if hasattr(mcp_server, "_edgemem_set_telemetry"):
+            mcp_server._edgemem_set_telemetry(tel, cfg)
 
-        app.state.edgemem_config = cfg
-        app.state.edgemem_http_client = client
-        app.state.edgemem_telemetry = tel
-        app.state.edgemem_telemetry_store = telemetry_store
-        app.state.edgemem_memory_store = memory_store
-        app.state.edgemem_memory_middleware = memory_middleware
-        app.state.edgemem_consolidation_worker = consolidation_worker
-        app.state.edgemem_router = router
-        app.state.edgemem_redactor = redactor
-        app.state.edgemem_counters = counters
-        app.state.edgemem_watchdog = watchdog
-        app.state.edgemem_budgeter = budgeter
-        app.state.edgemem_unloader = unloader
-        app.state.edgemem_pred_engine = pred_engine
-        app.state.edgemem_spec_stats = spec_stats
-        app.state.edgemem_last_num_ctx = None
+        app.state.crispllm_config = app.state.edgemem_config = cfg
+        app.state.crispllm_http_client = app.state.edgemem_http_client = client
+        app.state.crispllm_telemetry = app.state.edgemem_telemetry = tel
+        app.state.crispllm_telemetry_store = app.state.edgemem_telemetry_store = telemetry_store
+        app.state.crispllm_memory_store = app.state.edgemem_memory_store = memory_store
+        app.state.crispllm_memory_middleware = app.state.edgemem_memory_middleware = memory_middleware
+        app.state.crispllm_consolidation_worker = app.state.edgemem_consolidation_worker = consolidation_worker
+        app.state.crispllm_router = app.state.edgemem_router = router
+        app.state.crispllm_redactor = app.state.edgemem_redactor = redactor
+        app.state.crispllm_counters = app.state.edgemem_counters = counters
+        app.state.crispllm_watchdog = app.state.edgemem_watchdog = watchdog
+        app.state.crispllm_budgeter = app.state.edgemem_budgeter = budgeter
+        app.state.crispllm_unloader = app.state.edgemem_unloader = unloader
+        app.state.crispllm_pred_engine = app.state.edgemem_pred_engine = pred_engine
+        app.state.crispllm_spec_stats = app.state.edgemem_spec_stats = spec_stats
+        app.state.crispllm_last_num_ctx = app.state.edgemem_last_num_ctx = None
 
         if cfg.memory.enabled and cfg.memory.consolidation_enabled:
             consolidation_worker.start()
@@ -417,26 +420,26 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
             memory_store.close()
             telemetry_store.close()
 
-    app = FastAPI(title="EdgeMem Proxy", version="1.0.0", lifespan=lifespan)
-    app.add_middleware(EdgeMemAuthMiddleware, config=cfg.security)
-    app.state.edgemem_telemetry_store = telemetry_store
-    app.state.edgemem_config = cfg
-    app.state.edgemem_memory_store = memory_store
-    app.state.edgemem_memory_middleware = memory_middleware
-    app.state.edgemem_consolidation_worker = consolidation_worker
-    app.state.edgemem_router = router
-    app.state.edgemem_redactor = redactor
-    app.state.edgemem_counters = counters
-    app.state.edgemem_watchdog = watchdog
-    app.state.edgemem_budgeter = budgeter
-    app.state.edgemem_unloader = unloader
-    app.state.edgemem_pred_engine = pred_engine
-    app.state.edgemem_spec_stats = spec_stats
-    app.state.edgemem_last_num_ctx = None
+    app = FastAPI(title="CrispLLM Proxy", version="1.0.0", lifespan=lifespan)
+    app.add_middleware(CrispLLMAuthMiddleware, config=cfg.security)
+    app.state.crispllm_telemetry_store = app.state.edgemem_telemetry_store = telemetry_store
+    app.state.crispllm_config = app.state.edgemem_config = cfg
+    app.state.crispllm_memory_store = app.state.edgemem_memory_store = memory_store
+    app.state.crispllm_memory_middleware = app.state.edgemem_memory_middleware = memory_middleware
+    app.state.crispllm_consolidation_worker = app.state.edgemem_consolidation_worker = consolidation_worker
+    app.state.crispllm_router = app.state.edgemem_router = router
+    app.state.crispllm_redactor = app.state.edgemem_redactor = redactor
+    app.state.crispllm_counters = app.state.edgemem_counters = counters
+    app.state.crispllm_watchdog = app.state.edgemem_watchdog = watchdog
+    app.state.crispllm_budgeter = app.state.edgemem_budgeter = budgeter
+    app.state.crispllm_unloader = app.state.edgemem_unloader = unloader
+    app.state.crispllm_pred_engine = app.state.edgemem_pred_engine = pred_engine
+    app.state.crispllm_spec_stats = app.state.edgemem_spec_stats = spec_stats
+    app.state.crispllm_last_num_ctx = app.state.edgemem_last_num_ctx = None
 
     @app.get("/health")
     async def health(request: Request) -> JSONResponse:
-        c: EdgeMemConfig = request.app.state.edgemem_config
+        c: CrispLLMConfig = request.app.state.edgemem_config
         mem_store: MemoryStore = request.app.state.edgemem_memory_store
         cnt: ProxyCounters = request.app.state.edgemem_counters
         watchdog: RamPressureWatchdog | None = getattr(
@@ -517,7 +520,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
 
     @app.get("/v1/models")
     async def list_models(request: Request) -> JSONResponse:
-        c: EdgeMemConfig = request.app.state.edgemem_config
+        c: CrispLLMConfig = request.app.state.edgemem_config
         return JSONResponse(
             {
                 "object": "list",
@@ -525,7 +528,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
                     {
                         "id": c.model,
                         "object": "model",
-                        "owned_by": "edgemem-proxy",
+                        "owned_by": "crispllm",
                     }
                 ],
             }
@@ -536,7 +539,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         request: Request,
     ) -> StreamingResponse | JSONResponse | Response:
         t_ingress = time.perf_counter()
-        c: EdgeMemConfig = request.app.state.edgemem_config
+        c: CrispLLMConfig = request.app.state.edgemem_config
         client: httpx.AsyncClient = request.app.state.edgemem_http_client
         tel: TelemetryLogger = request.app.state.edgemem_telemetry
         tel_store: TelemetryStore = request.app.state.edgemem_telemetry_store
@@ -583,7 +586,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         input_tokens = est_tokens_sent
         target = app_router.select_target(body, request.headers, input_tokens)
         if target.decision is not None:
-            request.app.state.edgemem_last_num_ctx = target.decision.selected_num_ctx
+            request.app.state.crispllm_last_num_ctx = app.state.edgemem_last_num_ctx = target.decision.selected_num_ctx
             if target.decision.trigger_local_unload:
                 active_unloader: IdleUnloadWorker | None = getattr(
                     request.app.state, "edgemem_unloader", None
@@ -594,7 +597,7 @@ def create_app(cfg: EdgeMemConfig | None = None) -> FastAPI:
         upstream_body, session, headers = _prepare_payload_for_target(
             body, target, app_redactor, app_router
         )
-        header_pred = request.headers.get("X-EdgeMem-Prediction") or request.headers.get("x-edgemem-prediction")
+        header_pred = request.headers.get("X-CrispLLM-Prediction") or request.headers.get("x-crispllm-prediction") or request.headers.get("X-EdgeMem-Prediction") or request.headers.get("x-edgemem-prediction")
         spec_decision = pred_engine.evaluate(
             body,
             target_is_cloud=target.is_cloud,
@@ -830,6 +833,13 @@ async def _handle_non_streaming_request(
     existing_timing = resp.headers.get("server-timing") if resp is not None else None
     server_timing = _format_server_timing(proxy_overhead_ms, existing_timing)
     resp_headers = {
+        "X-CrispLLM-Route": target.tier,
+        "X-CrispLLM-Route-Reason": target.reason,
+        "X-CrispLLM-Task-Tier": target.task_tier,
+        "X-CrispLLM-Prefix-Stable": prefix_status,
+        "X-CrispLLM-Redacted": str(redacted_count),
+        "X-CrispLLM-Overhead-Ms": f"{proxy_overhead_ms:.2f}",
+        "X-CrispLLM-Speculative": spec_header,
         "X-EdgeMem-Route": target.tier,
         "X-EdgeMem-Route-Reason": target.reason,
         "X-EdgeMem-Task-Tier": target.task_tier,
@@ -1044,6 +1054,13 @@ async def _handle_streaming_request(
     )
     server_timing = _format_server_timing(proxy_overhead_ms, existing_timing)
     resp_headers = {
+        "X-CrispLLM-Route": target.tier,
+        "X-CrispLLM-Route-Reason": target.reason,
+        "X-CrispLLM-Task-Tier": target.task_tier,
+        "X-CrispLLM-Prefix-Stable": prefix_status,
+        "X-CrispLLM-Redacted": str(session.stats().total_redacted),
+        "X-CrispLLM-Overhead-Ms": f"{proxy_overhead_ms:.2f}",
+        "X-CrispLLM-Speculative": spec_header,
         "X-EdgeMem-Route": target.tier,
         "X-EdgeMem-Route-Reason": target.reason,
         "X-EdgeMem-Task-Tier": target.task_tier,

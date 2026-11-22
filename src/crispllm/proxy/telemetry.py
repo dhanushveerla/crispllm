@@ -18,9 +18,9 @@ from typing import Any
 
 import platformdirs
 
-from edgemem.proxy.sysinfo import get_process_rss_mb
+from crispllm.proxy.sysinfo import get_process_rss_mb
 
-logger = logging.getLogger("edgemem.proxy.telemetry")
+logger = logging.getLogger("crispllm.proxy.telemetry")
 
 
 @dataclass
@@ -47,7 +47,7 @@ class TelemetryStore:
 
     def __init__(self, db_path: Path | str | None = None) -> None:
         if db_path is None:
-            data_dir = platformdirs.user_data_dir("edgemem")
+            data_dir = platformdirs.user_data_dir("crispllm")
             self.db_path: Path | str = Path(data_dir) / "memory.db"
         elif isinstance(db_path, str) and db_path == ":memory:":
             self.db_path = ":memory:"

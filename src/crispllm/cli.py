@@ -1,6 +1,6 @@
-"""EdgeMem CLI - console entrypoint.
+"""CrispLLM CLI - console entrypoint.
 
-Supports: edgemem serve, edgemem init, edgemem status, edgemem stats, edgemem slice, edgemem memory, edgemem unload, edgemem doctor.
+Supports: crispllm serve, crispllm init, crispllm status, crispllm stats, crispllm slice, crispllm memory, crispllm unload, crispllm doctor.
 """
 
 from __future__ import annotations
@@ -12,14 +12,14 @@ from pathlib import Path
 
 import click
 
-from edgemem import __version__
-from edgemem.config import EdgeMemConfig, default_toml_content, load_config
+from crispllm import __version__
+from crispllm.config import CrispLLMConfig, CrispLLMConfig, default_toml_content, load_config
 
 
 @click.group()
-@click.version_option(__version__, "--version", "-v", package_name="edgemem-proxy")
+@click.version_option(__version__, "--version", "-v", package_name="crispllm")
 def cli() -> None:
-    """EdgeMem - Lightweight unified memory & context proxy."""
+    """CrispLLM - Lightweight unified memory & context proxy."""
 
 
 @cli.command()
@@ -27,7 +27,7 @@ def cli() -> None:
 @click.option("--port", default=None, type=int, help="Bind port (overrides config).")
 @click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path))
 def serve(host: str | None, port: int | None, config_path: Path | None) -> None:
-    """Start the EdgeMem proxy server."""
+    """Start the CrispLLM proxy server."""
     cfg = load_config(config_path)
     if host is not None:
         cfg.host = host
@@ -36,10 +36,10 @@ def serve(host: str | None, port: int | None, config_path: Path | None) -> None:
 
     import uvicorn
 
-    from edgemem.proxy.app import create_app
+    from crispllm.proxy.app import create_app
 
     app = create_app(cfg)
-    click.echo(f"EdgeMem proxy -> {cfg.upstream_base_url} (model: {cfg.model})")
+    click.echo(f"CrispLLM proxy -> {cfg.upstream_base_url} (model: {cfg.model})")
     click.echo(f"Listening on http://{cfg.host}:{cfg.port}")
     click.echo(f"MCP endpoint: http://{cfg.host}:{cfg.port}/mcp")
     uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="info")
@@ -58,7 +58,7 @@ def serve(host: str | None, port: int | None, config_path: Path | None) -> None:
     "-o",
     "--path",
     "output",
-    default=Path("edgemem.toml"),
+    default=Path("crispllm.toml"),
     type=click.Path(path_type=Path),
     show_default=True,
     help="Output configuration file path.",
@@ -71,7 +71,7 @@ def serve(host: str | None, port: int | None, config_path: Path | None) -> None:
     help="Overwrite existing configuration file.",
 )
 def init(preset: str, output: Path, force: bool) -> None:
-    """Generate an edgemem.toml configuration file."""
+    """Generate an crispllm.toml configuration file."""
     if output.exists() and not force:
         click.echo(
             f"Config file already exists at {output}. Use --force to overwrite.",
@@ -83,7 +83,7 @@ def init(preset: str, output: Path, force: bool) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(content, encoding="utf-8", newline="\n")
     click.echo(f"Created {output} (preset: {preset})")
-    click.echo("Start EdgeMem with:")
+    click.echo("Start CrispLLM with:")
     preset_lower = preset.lower()
     env_set = "$env:" if sys.platform == "win32" else "export "
     if preset_lower == "nvidia":
@@ -92,7 +92,7 @@ def init(preset: str, output: Path, force: bool) -> None:
         click.echo(f'  {env_set}GEMINI_API_KEY="<your-key>"')
     elif preset_lower == "hybrid":
         click.echo(f'  {env_set}NVIDIA_API_KEY="<your-key>"  (optional for cloud fallback)')
-    click.echo("  edgemem serve")
+    click.echo("  crispllm serve")
 
 
 @cli.command()
@@ -120,7 +120,7 @@ def init(preset: str, output: Path, force: bool) -> None:
     "config_path",
     default=None,
     type=click.Path(exists=True, path_type=Path),
-    help="Path to edgemem.toml configuration file.",
+    help="Path to crispllm.toml configuration file.",
 )
 def stats(
     days: int | None,
@@ -130,7 +130,7 @@ def stats(
 ) -> None:
     """Show or reset persistent request telemetry."""
     cfg = load_config(config_path)
-    from edgemem.proxy.telemetry import TelemetryStore
+    from crispllm.proxy.telemetry import TelemetryStore
 
     with TelemetryStore(cfg.memory.db_path) as store:
         if reset:
@@ -145,7 +145,7 @@ def stats(
             return
 
         window_str = f"past {days} days" if days is not None else "all time"
-        click.echo(f"EdgeMem Telemetry Summary ({window_str})")
+        click.echo(f"CrispLLM Telemetry Summary ({window_str})")
         click.echo("=" * 44)
         click.echo("Requests:")
         click.echo(f"  Total:               {summary['total_requests']}")
@@ -171,7 +171,7 @@ def stats(
 @cli.command()
 @click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path))
 def status(config_path: Path | None) -> None:
-    """Show EdgeMem proxy status."""
+    """Show CrispLLM proxy status."""
     cfg = load_config(config_path)
 
     import httpx
@@ -227,20 +227,20 @@ def status(config_path: Path | None) -> None:
             pct_str = f"{c_pct:.1f}%" if c_pct is not None else "N/A"
             click.echo(f"Speculative: cloud_injected={c_inj}, retries={c_ret}, accepted={c_acc}/{c_tot} ({pct_str})")
     except httpx.ConnectError:
-        click.echo(f"EdgeMem not running at {url}", err=True)
+        click.echo(f"CrispLLM not running at {url}", err=True)
         sys.exit(1)
 
 
 @cli.command()
 @click.option("--model", default=None, help="Model name to unload (defaults to configured model).")
-@click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path), help="Path to edgemem.toml configuration file.")
+@click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path), help="Path to crispllm.toml configuration file.")
 def unload(model: str | None, config_path: Path | None) -> None:
     """Manually unload idle local model weights to free RAM/VRAM."""
     cfg = load_config(config_path)
     target_model = model or cfg.model
     backend = cfg.resources.local_backend
     if backend == "auto":
-        from edgemem.proxy.budgeter import detect_local_backend
+        from crispllm.proxy.budgeter import detect_local_backend
 
         backend = detect_local_backend(cfg.upstream_base_url, cfg.resources.local_backend)
 
@@ -249,7 +249,7 @@ def unload(model: str | None, config_path: Path | None) -> None:
         return
 
     import httpx
-    from edgemem.proxy.unloader import get_ollama_generate_url
+    from crispllm.proxy.unloader import get_ollama_generate_url
 
     url = get_ollama_generate_url(cfg.upstream_base_url)
     try:
@@ -295,9 +295,9 @@ def slice(
     Prints token counts, compression %, and latency to stderr.
 
     Example:
-        edgemem slice . --tokens 2048 --query "authentication" --focus src/auth.py
+        crispllm slice . --tokens 2048 --query "authentication" --focus src/auth.py
     """
-    from edgemem.slicer.repomap import RepoMap, count_tokens
+    from crispllm.slicer.repomap import RepoMap, count_tokens
 
     t0 = time.perf_counter()
 
@@ -308,7 +308,7 @@ def slice(
             elapsed_ms = (time.perf_counter() - t0) * 1000
             click.echo(res.content)
             click.echo(
-                f"\n[EdgeMem slice-symbol] symbol='{symbol}' found={res.found} "
+                f"\n[CrispLLM slice-symbol] symbol='{symbol}' found={res.found} "
                 f"file={res.target_file} callees={res.callee_count} callers={res.caller_count} "
                 f"sliced={res.sliced_tokens:,} tok raw={res.raw_tokens:,} tok fallback={res.fallback_used} "
                 f"latency={elapsed_ms:.0f}ms",
@@ -335,7 +335,7 @@ def slice(
     click.echo(repo_map, nl=False)
 
     click.echo(
-        f"\n[EdgeMem slice] raw={raw_tokens:,} tok  sliced={sliced_tokens:,} tok  "
+        f"\n[CrispLLM slice] raw={raw_tokens:,} tok  sliced={sliced_tokens:,} tok  "
         f"compression={compression_pct:.1f}%  latency={elapsed_ms:.0f}ms",
         err=True,
     )
@@ -343,7 +343,7 @@ def slice(
 
 @cli.group()
 def memory() -> None:
-    """Manage EdgeMem SQLite tiered memory store."""
+    """Manage CrispLLM SQLite tiered memory store."""
 
 
 @memory.command("list")
@@ -359,8 +359,8 @@ def memory_list(
     limit: int,
     config_path: Path | None,
 ) -> None:
-    """List stored facts in EdgeMem memory."""
-    from edgemem.memory.store import MemoryStore
+    """List stored facts in CrispLLM memory."""
+    from crispllm.memory.store import MemoryStore
 
     cfg = load_config(config_path)
     with MemoryStore(cfg.memory.db_path) as store:
@@ -387,8 +387,8 @@ def memory_list(
 @click.option("--limit", default=10, type=int, help="Max results.")
 @click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path))
 def memory_search(query: str, all_facts: bool, limit: int, config_path: Path | None) -> None:
-    """Search EdgeMem memory using BM25 FTS5 ranking."""
-    from edgemem.memory.store import MemoryStore
+    """Search CrispLLM memory using BM25 FTS5 ranking."""
+    from crispllm.memory.store import MemoryStore
 
     cfg = load_config(config_path)
     with MemoryStore(cfg.memory.db_path) as store:
@@ -413,8 +413,8 @@ def memory_search(query: str, all_facts: bool, limit: int, config_path: Path | N
 @click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path))
 def memory_consolidate(dry_run: bool, config_path: Path | None) -> None:
     """Run an immediate memory consolidation sweep."""
-    from edgemem.memory.consolidator import MemoryConsolidator
-    from edgemem.memory.store import MemoryStore
+    from crispllm.memory.consolidator import MemoryConsolidator
+    from crispllm.memory.store import MemoryStore
 
     cfg = load_config(config_path)
     with MemoryStore(cfg.memory.db_path) as store:
@@ -435,7 +435,7 @@ def memory_consolidate(dry_run: bool, config_path: Path | None) -> None:
 @click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path))
 def memory_history(key: str, session: str | None, config_path: Path | None) -> None:
     """Display the versioned supersession timeline of a memory key."""
-    from edgemem.memory.store import MemoryStore
+    from crispllm.memory.store import MemoryStore
 
     cfg = load_config(config_path)
     with MemoryStore(cfg.memory.db_path) as store:
@@ -454,8 +454,8 @@ def memory_history(key: str, session: str | None, config_path: Path | None) -> N
 @click.option("--session", default=None, help="Clear facts for a specific session ID only.")
 @click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path))
 def memory_clear(session: str | None, config_path: Path | None) -> None:
-    """Clear facts from EdgeMem memory."""
-    from edgemem.memory.store import MemoryStore
+    """Clear facts from CrispLLM memory."""
+    from crispllm.memory.store import MemoryStore
 
     cfg = load_config(config_path)
     with MemoryStore(cfg.memory.db_path) as store:
@@ -476,7 +476,7 @@ def memory_clear(session: str | None, config_path: Path | None) -> None:
 @click.option("--device", default=None, help="Target device (cpu, vulkan, cuda, mps).")
 @click.option("--ctx-size", default=None, type=int, help="Main model context window (default: profile cap).")
 @click.option("--port", default=8081, type=int, help="Listen port (default: 8081).")
-@click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path), help="Path to edgemem.toml configuration file.")
+@click.option("--config", "config_path", default=None, type=click.Path(exists=True, path_type=Path), help="Path to crispllm.toml configuration file.")
 def llama_cmd(
     model: str | None,
     draft_model: str | None,
@@ -489,8 +489,8 @@ def llama_cmd(
     config_path: Path | None,
 ) -> None:
     """Generate ready-to-run llama-server command with speculative decoding presets."""
-    from edgemem.proxy.speculative import build_llama_server_command
-    from edgemem.proxy.watchdog import RamPressureWatchdog
+    from crispllm.proxy.speculative import build_llama_server_command
+    from crispllm.proxy.watchdog import RamPressureWatchdog
 
     cfg = load_config(config_path)
     model_path = model or cfg.model
@@ -525,15 +525,15 @@ def llama_cmd(
 
 
 @cli.command("doctor")
-@click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to edgemem.toml configuration file.")
+@click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to crispllm.toml configuration file.")
 def doctor(config_path: Path | None) -> None:
     """Check system environment, Tree-sitter parsers, SQLite FTS5 support, and hardware specs."""
     import platform
     import sqlite3
 
-    from edgemem.proxy.sysinfo import get_process_rss_mb, get_system_memory_info
+    from crispllm.proxy.sysinfo import get_process_rss_mb, get_system_memory_info
 
-    click.echo(f"EdgeMem Doctor v{__version__}")
+    click.echo(f"CrispLLM Doctor v{__version__}")
     click.echo("=" * 40)
 
     py_ver = sys.version.split()[0]
@@ -553,8 +553,8 @@ def doctor(config_path: Path | None) -> None:
     try:
         con = sqlite3.connect(":memory:")
         con.execute("CREATE VIRTUAL TABLE _test_fts USING fts5(content);")
-        con.execute("INSERT INTO _test_fts VALUES ('edgemem test');")
-        rows = con.execute("SELECT * FROM _test_fts WHERE _test_fts MATCH 'edgemem';").fetchall()
+        con.execute("INSERT INTO _test_fts VALUES ('crispllm test');")
+        rows = con.execute("SELECT * FROM _test_fts WHERE _test_fts MATCH 'crispllm';").fetchall()
         con.close()
         if rows:
             click.echo(f"[OK] SQLite FTS5: available (SQLite {sqlite3.sqlite_version})")
@@ -574,7 +574,7 @@ def doctor(config_path: Path | None) -> None:
     except Exception as exc:
         click.echo(f"[WARN] Tree-sitter language pack: {exc}")
 
-    resolved_cfg = config_path or Path("edgemem.toml")
+    resolved_cfg = config_path or Path("crispllm.toml")
     if resolved_cfg.exists():
         try:
             load_config(resolved_cfg)
@@ -583,3 +583,6 @@ def doctor(config_path: Path | None) -> None:
             click.echo(f"[FAIL] Config {resolved_cfg}: {exc}")
     else:
         click.echo(f"[INFO] Config: {resolved_cfg} not found (using defaults)")
+
+
+main = cli

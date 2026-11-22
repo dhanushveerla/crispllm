@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""EdgeMem Universal Benchmark Runner.
+"""CrispLLM Universal Benchmark Runner.
 Talks to any OpenAI-compatible /v1/chat/completions endpoint.
 """
 from __future__ import annotations
@@ -24,7 +24,7 @@ import urllib.request
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="EdgeMem benchmark runner - OpenAI-compatible endpoint",
+        description="CrispLLM benchmark runner - OpenAI-compatible endpoint",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""
             Examples:
@@ -91,7 +91,7 @@ def parse_sse_stream(
             hdr_dict = {str(k).lower(): str(v) for k, v in headers.items()}
 
     proxy_overhead_ms = 0.0
-    hdr_overhead = hdr_dict.get("x-edgemem-overhead-ms")
+    hdr_overhead = hdr_dict.get("x-crispllm-overhead-ms") or hdr_dict.get("x-edgemem-overhead-ms")
     if hdr_overhead:
         try:
             proxy_overhead_ms = max(0.0, float(hdr_overhead))
@@ -275,7 +275,12 @@ def _http_post_json(
                 t_done = time.perf_counter()
                 wall_ms = max(0.0, (t_done - t_start) * 1000.0)
                 proxy_overhead_ms = 0.0
-                hdr_val = resp.headers.get("x-edgemem-overhead-ms") or resp.headers.get("X-EdgeMem-Overhead-Ms")
+                hdr_val = (
+                    resp.headers.get("x-crispllm-overhead-ms")
+                    or resp.headers.get("X-CrispLLM-Overhead-Ms")
+                    or resp.headers.get("x-edgemem-overhead-ms")
+                    or resp.headers.get("X-EdgeMem-Overhead-Ms")
+                )
                 if hdr_val:
                     try:
                         proxy_overhead_ms = max(0.0, float(hdr_val))
@@ -386,7 +391,7 @@ def run_task(
     test_code = task["test_code"]
     reference_solution = task["reference_solution"]
 
-    with tempfile.TemporaryDirectory(prefix=f"edgemem_bench_{task_id}_") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix=f"crispllm_bench_{task_id}_") as tmpdir:
         tmp = Path(tmpdir)
 
         for rel_path, content in files.items():
@@ -523,7 +528,7 @@ def run_task(
             if not wrote_any:
                 (tmp / "solution.py").write_text(f"'''\n{final_text}\n'''", encoding="utf-8")
 
-        test_file = tmp / "_edgemem_test_.py"
+        test_file = tmp / "_crispllm_test_.py"
         test_file.write_text(test_code, encoding="utf-8")
 
         passed = False
@@ -827,7 +832,8 @@ def format_summary_report(summary: dict, label: str = "") -> str:
     return "\n".join(lines)
 
 
-def format_comparison_table(raw_summary: dict, edgemem_summary: dict) -> str:
+def format_comparison_table(raw_summary: dict, crispllm_summary: dict | None = None, edgemem_summary: dict | None = None) -> str:
+    summary = crispllm_summary if crispllm_summary is not None else (edgemem_summary or {})
     def _pct_delta(base: float | None, current: float | None) -> str:
         if base is None or current is None or base == 0:
             return "-"
@@ -839,17 +845,17 @@ def format_comparison_table(raw_summary: dict, edgemem_summary: dict) -> str:
     raw_n = raw_summary.get("sample_count", 0)
     raw_passed = raw_summary.get("passed_count", 0)
 
-    edge_pass = edgemem_summary.get("pass_at_1_pct", 0.0)
-    edge_n = edgemem_summary.get("sample_count", 0)
-    edge_passed = edgemem_summary.get("passed_count", 0)
+    edge_pass = summary.get("pass_at_1_pct", 0.0)
+    edge_n = summary.get("sample_count", 0)
+    edge_passed = summary.get("passed_count", 0)
 
     raw_tok = raw_summary.get("tokens", {})
-    edge_tok = edgemem_summary.get("tokens", {})
+    edge_tok = summary.get("tokens", {})
     raw_prompt = raw_tok.get("total_prompt_tokens", 0)
     edge_prompt = edge_tok.get("total_prompt_tokens", 0)
 
     raw_lat = raw_summary.get("latency", {})
-    edge_lat = edgemem_summary.get("latency", {})
+    edge_lat = summary.get("latency", {})
     raw_wall = raw_lat.get("mean_wall_ms")
     edge_wall = edge_lat.get("mean_wall_ms")
 
@@ -882,12 +888,12 @@ def format_comparison_table(raw_summary: dict, edgemem_summary: dict) -> str:
 
     lines = [
         "+-------------------------------+--------------------------+--------------------------+------------+",
-        "| Metric                        | Raw Baseline             | EdgeMem                  | Delta      |",
+        "| Metric                        | Raw Baseline             | CrispLLM                 | Delta      |",
         "+-------------------------------+--------------------------+--------------------------+------------+",
         f"| Pass@1                        | {raw_pass_str:<24} | {edge_pass_str:<24} | {_pct_delta(raw_pass, edge_pass):<10} |",
         f"| Prompt Tokens                 | {raw_prompt:<24} | {edge_prompt:<24} | {_pct_delta(raw_prompt, edge_prompt):<10} |",
         f"| Total Wall (ms)               | {raw_wall_str:<24} | {edge_wall_str:<24} | {_pct_delta(raw_wall, edge_wall):<10} |",
-        f"| EdgeMem Proxy Overhead (ms)   | {'-':<24} | {overhead_str:<24} | {'-':<10} |",
+        f"| CrispLLM Proxy Overhead (ms)  | {'-':<24} | {overhead_str:<24} | {'-':<10} |",
         f"| Prefill / TTFT (ms)           | {raw_prefill_str:<24} | {edge_prefill_str:<24} | {_pct_delta(raw_prefill, edge_prefill):<10} |",
         f"| Decode (ms)                   | {raw_decode_str:<24} | {edge_decode_str:<24} | {_pct_delta(raw_decode, edge_decode):<10} |",
         f"| Decode (tok/s)                | {raw_tps_str:<24} | {edge_tps_str:<24} | {_pct_delta(raw_tps, edge_tps):<10} |",
@@ -912,7 +918,7 @@ def build_markdown_report(
     c = p["counts"]
 
     lines = [
-        f"# EdgeMem Benchmark Report: `{label}`",
+        f"# CrispLLM Benchmark Report: `{label}`",
         "",
         "| Field | Value |",
         "|---|---|",
@@ -944,9 +950,9 @@ def build_markdown_report(
         f"| Mean Wall (ms) | {l['mean_wall_ms']} (n={l['n_wall']}) |"
         if l.get("mean_wall_ms") is not None
         else "| Mean Wall (ms) | - |",
-        f"| EdgeMem Proxy Overhead (ms) | {l['mean_proxy_overhead_ms']} (n={l['n_overhead']}) |"
+        f"| CrispLLM Proxy Overhead (ms) | {l['mean_proxy_overhead_ms']} (n={l['n_overhead']}) |"
         if l.get("mean_proxy_overhead_ms") is not None
-        else "| EdgeMem Proxy Overhead (ms) | - |",
+        else "| CrispLLM Proxy Overhead (ms) | - |",
         f"| Mean Prefill / TTFT (ms) | {l['mean_prefill_ms']} (n={l['n_prefill']}) |"
         if l.get("mean_prefill_ms") is not None
         else (f"| Mean TTFT (ms) | {l['mean_ttft_ms']} (n={l['n_ttft']}) |" if l.get("mean_ttft_ms") is not None else "| Mean TTFT (ms) | - |"),
@@ -1013,7 +1019,7 @@ def main() -> None:
         sys.exit("No tasks to run after filtering.")
 
     stream_mode_str = "streaming" if args.stream else "non-streaming"
-    print(f"[EdgeMem Bench] label={args.label!r}  model={args.model!r}  tasks={len(all_tasks)}  mode={stream_mode_str}")
+    print(f"[CrispLLM Bench] label={args.label!r}  model={args.model!r}  tasks={len(all_tasks)}  mode={stream_mode_str}")
     print(f"  endpoint: {args.base_url}")
     print()
 

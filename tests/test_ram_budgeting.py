@@ -12,16 +12,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 from starlette.testclient import TestClient
 
-from edgemem.config import EdgeMemConfig, ResourcesConfig
-from edgemem.proxy.app import create_app
-from edgemem.proxy.budgeter import ContextBudgeter, detect_local_backend
-from edgemem.proxy.sysinfo import (
+from crispllm.config import EdgeMemConfig, ResourcesConfig
+from crispllm.proxy.app import create_app
+from crispllm.proxy.budgeter import ContextBudgeter, detect_local_backend
+from crispllm.proxy.sysinfo import (
     MEMORYSTATUSEX,
     SystemMemoryInfo,
     get_system_memory_info,
 )
-from edgemem.proxy.unloader import IdleUnloadWorker, get_ollama_generate_url
-from edgemem.proxy.watchdog import RamPressureWatchdog
+from crispllm.proxy.unloader import IdleUnloadWorker, get_ollama_generate_url
+from crispllm.proxy.watchdog import RamPressureWatchdog
 
 
 def test_sysinfo_linux_proc_meminfo() -> None:

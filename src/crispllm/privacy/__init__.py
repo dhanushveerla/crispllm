@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from edgemem.privacy.redactor import (
+from crispllm.privacy.redactor import (
     Redactor,
     RedactionConfig,
     RedactionSession,
@@ -9,7 +9,7 @@ from edgemem.privacy.redactor import (
     sanitize_fact,
     sanitize_for_memory,
 )
-from edgemem.privacy.stream_restorer import StreamRestorer
+from crispllm.privacy.stream_restorer import StreamRestorer
 
 __all__ = [
     "Redactor",

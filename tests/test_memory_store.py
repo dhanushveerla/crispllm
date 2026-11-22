@@ -4,8 +4,8 @@ import concurrent .futures
 from pathlib import Path 
 import pytest 
 
-from edgemem .memory .extractor import ExtractedFact ,extract_facts_from_messages 
-from edgemem .memory .store import Fact ,MemoryStore 
+from crispllm .memory .extractor import ExtractedFact ,extract_facts_from_messages 
+from crispllm .memory .store import Fact ,MemoryStore 
 
 
 def test_wal_and_in_memory_modes (tmp_path :Path )->None :

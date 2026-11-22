@@ -19,11 +19,11 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from edgemem.config import EdgeMemConfig
-from edgemem.proxy.app import create_app
-from edgemem.slicer.cache import TagCache
-from edgemem.slicer.repomap import RepoMap, count_tokens, file_outline
-from edgemem.slicer.tags import extract_tags, scan_repo_files
+from crispllm.config import EdgeMemConfig
+from crispllm.proxy.app import create_app
+from crispllm.slicer.cache import TagCache
+from crispllm.slicer.repomap import RepoMap, count_tokens, file_outline
+from crispllm.slicer.tags import extract_tags, scan_repo_files
 
 
 # ---------------------------------------------------------------------------
@@ -559,8 +559,8 @@ class TestOutlineCacheBehavior:
     def test_second_slice_hits_in_memory_outline_cache(
         self, multi_file_project: Path, tmp_path: Path, monkeypatch
     ):
-        from edgemem.slicer import repomap
-        from edgemem.slicer.repomap import clear_graph_cache
+        from crispllm.slicer import repomap
+        from crispllm.slicer.repomap import clear_graph_cache
 
         clear_graph_cache()
         cache_db = tmp_path / "outline_test.db"
@@ -588,8 +588,8 @@ class TestOutlineCacheBehavior:
     def test_warm_sqlite_hits_persisted_outline_cache(
         self, multi_file_project: Path, tmp_path: Path, monkeypatch
     ):
-        from edgemem.slicer import repomap
-        from edgemem.slicer.repomap import clear_graph_cache
+        from crispllm.slicer import repomap
+        from crispllm.slicer.repomap import clear_graph_cache
 
         clear_graph_cache()
         cache_db = tmp_path / "persisted_outline.db"
@@ -625,7 +625,7 @@ class TestOutlineCacheBehavior:
     def test_file_edit_invalidates_caches_and_returns_updated_symbols(
         self, multi_file_project: Path, tmp_path: Path
     ):
-        from edgemem.slicer.repomap import clear_graph_cache
+        from crispllm.slicer.repomap import clear_graph_cache
 
         clear_graph_cache()
         cache_db = tmp_path / "invalidation_test.db"
@@ -671,7 +671,7 @@ class TestOutlineCacheBehavior:
         cache.close()
 
     def test_in_memory_lru_cache_never_exceeds_max_entries(self, tmp_path: Path):
-        from edgemem.slicer.cache import OutlineCache
+        from crispllm.slicer.cache import OutlineCache
 
         cache_db = tmp_path / "lru_limit_test.db"
         cache = OutlineCache(db_path=cache_db, max_entries=3)
@@ -688,8 +688,8 @@ class TestOutlineCacheBehavior:
     def test_warm_repo_map_never_loads_tiktoken(
         self, multi_file_project: Path, tmp_path: Path, monkeypatch
     ):
-        from edgemem.slicer import repomap
-        from edgemem.slicer.repomap import clear_graph_cache
+        from crispllm.slicer import repomap
+        from crispllm.slicer.repomap import clear_graph_cache
         import tiktoken
 
         cache_db = tmp_path / "warm_tiktoken.db"
@@ -719,9 +719,9 @@ class TestOutlineCacheBehavior:
     def test_find_matching_files_camel_and_snake_case_equivalence(
         self, multi_file_project: Path
     ):
-        from edgemem.slicer.pagerank import find_matching_files, personalise_ranks
-        from edgemem.slicer.repomap import RepoMap, extract_query_tokens
-        from edgemem.slicer.tags import extract_tags, scan_repo_files
+        from crispllm.slicer.pagerank import find_matching_files, personalise_ranks
+        from crispllm.slicer.repomap import RepoMap, extract_query_tokens
+        from crispllm.slicer.tags import extract_tags, scan_repo_files
 
         files = scan_repo_files(multi_file_project)
         all_tags = []

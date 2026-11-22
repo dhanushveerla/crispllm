@@ -13,7 +13,7 @@ from typing import Any
 
 import platformdirs
 
-from edgemem.privacy.redactor import sanitize_fact, sanitize_for_memory
+from crispllm.privacy.redactor import sanitize_fact, sanitize_for_memory
 
 
 def compute_effective_salience(
@@ -69,7 +69,7 @@ class MemoryStore:
 
     def __init__(self, db_path: str | Path | None = None) -> None:
         if db_path is None:
-            data_dir = platformdirs.user_data_dir("edgemem")
+            data_dir = platformdirs.user_data_dir("crispllm")
             self.db_path: Path | str = Path(data_dir) / "memory.db"
         elif isinstance(db_path, str) and db_path == ":memory:":
             self.db_path = ":memory:"

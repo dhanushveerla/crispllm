@@ -17,10 +17,10 @@ platformdirs — and zero numpy/scipy imports.
 
 from __future__ import annotations
 
-from edgemem.slicer.repomap import RepoMap
-from edgemem.slicer.tags import Tag, extract_tags
-from edgemem.slicer.cache import OutlineCache, TagCache
-from edgemem.slicer.symbols import SymbolDef, SymbolSliceResult, extract_symbols
+from crispllm.slicer.repomap import RepoMap
+from crispllm.slicer.tags import Tag, extract_tags
+from crispllm.slicer.cache import OutlineCache, TagCache
+from crispllm.slicer.symbols import SymbolDef, SymbolSliceResult, extract_symbols
 
 __all__ = [
     "RepoMap",

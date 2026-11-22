@@ -10,8 +10,8 @@ from click.testing import CliRunner
 import httpx
 from starlette.testclient import TestClient
 
-from edgemem.cli import cli
-from edgemem.config import (
+from crispllm.cli import cli
+from crispllm.config import (
     CloudUpstreamConfig,
     EdgeMemConfig,
     MemoryConfig,
@@ -19,8 +19,8 @@ from edgemem.config import (
     RoutingConfig,
     SpeculativeConfig,
 )
-from edgemem.proxy.app import create_app
-from edgemem.proxy.speculative import (
+from crispllm.proxy.app import create_app
+from crispllm.proxy.speculative import (
     PredictedOutputsEngine,
     SpeculativeStats,
     build_llama_server_command,

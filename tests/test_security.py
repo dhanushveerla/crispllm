@@ -13,10 +13,10 @@ import httpx
 import pytest
 from starlette.testclient import TestClient
 
-from edgemem.config import EdgeMemConfig, MemoryConfig, SecurityConfig
-from edgemem.proxy.app import create_app
-from edgemem.proxy.mcp_server import create_mcp_server
-from edgemem.proxy.sysinfo import get_process_rss_mb
+from crispllm.config import EdgeMemConfig, MemoryConfig, SecurityConfig
+from crispllm.proxy.app import create_app
+from crispllm.proxy.mcp_server import create_mcp_server
+from crispllm.proxy.sysinfo import get_process_rss_mb
 
 
 NON_STREAM_RESPONSE: dict[str, Any] = {
@@ -121,7 +121,7 @@ def test_backward_compatibility_defaults(tmp_path, monkeypatch):
         )
         assert mcp_resp.status_code == 200
         init_data = mcp_resp.json()
-        assert init_data.get("result", {}).get("serverInfo", {}).get("name") == "EdgeMem"
+        assert init_data.get("result", {}).get("serverInfo", {}).get("name") in ("CrispLLM", "EdgeMem")
         assert init_data.get("result", {}).get("serverInfo", {}).get("version") == "1.1.0"
 
 

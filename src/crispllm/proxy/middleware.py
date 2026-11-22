@@ -14,12 +14,12 @@ import re
 import time
 from typing import Any, Mapping
 
-from edgemem.config import MemoryConfig
-from edgemem.memory.extractor import extract_facts_from_messages
-from edgemem.memory.store import Fact, MemoryStore, compute_effective_salience
-from edgemem.privacy.redactor import sanitize_fact, sanitize_for_memory
+from crispllm.config import MemoryConfig
+from crispllm.memory.extractor import extract_facts_from_messages
+from crispllm.memory.store import Fact, MemoryStore, compute_effective_salience
+from crispllm.privacy.redactor import sanitize_fact, sanitize_for_memory
 
-logger = logging.getLogger("edgemem.proxy.memory")
+logger = logging.getLogger("crispllm.proxy.memory")
 
 _STOPWORDS: frozenset[str] = frozenset({
     "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "of",
@@ -149,7 +149,7 @@ class MemoryMiddleware:
     ) -> str:
         """Derive an isolated session ID from headers or initial turn content."""
         for k, v in headers.items():
-            if k.lower() == "x-edgemem-session" and v:
+            if k.lower() in ("x-crispllm-session", "x-edgemem-session") and v:
                 return v.strip()
 
         system_text = ""
@@ -417,7 +417,7 @@ class MemoryMiddleware:
                 core_lines: list[str] = []
                 seen_vals: set[str] = set()
                 core_header = (
-                    "--- EdgeMem Core Memory ---\n"
+                    "--- CrispLLM Core Memory ---\n"
                     "Earlier-turn constraints & facts (follow these unless the latest user message "
                     "explicitly specifies an exception or return behavior):"
                 )
@@ -451,8 +451,8 @@ class MemoryMiddleware:
                         first_msg["content"] = core_block
 
                 episodic_lines: list[str] = []
-                ep_header = "<edgemem_context>"
-                ep_footer = "</edgemem_context>"
+                ep_header = "<crispllm_context>"
+                ep_footer = "</crispllm_context>"
                 remaining_budget = max(0, self.config.max_injected_tokens - injected_tokens)
 
                 for f in episodic_facts:
@@ -494,7 +494,7 @@ class MemoryMiddleware:
                 memory_block = ""
                 if core_facts or episodic_facts:
                     header = (
-                        "[EdgeMem Active Memory]\n"
+                        "[CrispLLM Active Memory]\n"
                         "Earlier-turn constraints & facts (follow these unless the latest user message "
                         "explicitly specifies an exception or return behavior):"
                     )

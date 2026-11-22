@@ -7,14 +7,14 @@ from fastapi.testclient import TestClient
 import httpx
 import pytest
 
-from edgemem.config import (
+from crispllm.config import (
     CloudUpstreamConfig,
     EdgeMemConfig,
     MemoryConfig,
     PrivacyConfig,
     RoutingConfig,
 )
-from edgemem.proxy.app import create_app
+from crispllm.proxy.app import create_app
 
 
 class MockDualTransport(httpx.AsyncBaseTransport):
@@ -276,11 +276,11 @@ def test_local_to_cloud_fallback(tmp_path) -> None:
 
         data = r1.json()
         assert secret in data["choices"][0]["message"]["content"]
-        assert "__EDGEMEM_" not in data["choices"][0]["message"]["content"]
+        assert "__CRISPLLM_" not in data["choices"][0]["message"]["content"] and "__EDGEMEM_" not in data["choices"][0]["message"]["content"]
 
         cloud_req_body = transport.request_bodies[-1]
         assert secret not in json.dumps(cloud_req_body)
-        assert "__EDGEMEM_SECRET_1__" in json.dumps(cloud_req_body)
+        assert "__CRISPLLM_SECRET_1__" in json.dumps(cloud_req_body) or "__EDGEMEM_SECRET_1__" in json.dumps(cloud_req_body)
 
         transport.local_error = 503
         r2 = client.post(
@@ -321,11 +321,11 @@ def test_local_404_model_not_found_fallback(tmp_path) -> None:
 
         data = resp.json()
         assert secret in data["choices"][0]["message"]["content"]
-        assert "__EDGEMEM_" not in data["choices"][0]["message"]["content"]
+        assert "__CRISPLLM_" not in data["choices"][0]["message"]["content"] and "__EDGEMEM_" not in data["choices"][0]["message"]["content"]
 
         cloud_req = transport.request_bodies[-1]
         assert secret not in json.dumps(cloud_req)
-        assert "__EDGEMEM_SECRET_1__" in json.dumps(cloud_req)
+        assert "__CRISPLLM_SECRET_1__" in json.dumps(cloud_req) or "__EDGEMEM_SECRET_1__" in json.dumps(cloud_req)
 
         health = client.get("/health").json()
         assert health["fallback_escalations"] == 1
@@ -381,7 +381,7 @@ def test_non_streaming_privacy_round_trip(tmp_path) -> None:
         assert nvapi_key in content
         assert db_pass in content
         assert email in content
-        assert "__EDGEMEM_" not in content
+        assert "__CRISPLLM_" not in content and "__EDGEMEM_" not in content
 
         health = client.get("/health").json()
         assert health["secrets_redacted_total"] == 3
@@ -435,7 +435,7 @@ def test_streaming_sse_privacy_round_trip(tmp_path) -> None:
         assert saw_done
         reconstructed = "".join(deltas)
         assert reconstructed == f"Your key is {secret} verified!"
-        assert "__EDGEMEM_" not in reconstructed
+        assert "__CRISPLLM_" not in reconstructed and "__EDGEMEM_" not in reconstructed
 
 
 def test_localhost_skip(tmp_path) -> None:
@@ -463,7 +463,7 @@ def test_localhost_skip(tmp_path) -> None:
         local_req = transport.request_bodies[-1]
         req_json = json.dumps(local_req)
         assert secret in req_json
-        assert "__EDGEMEM_" not in req_json
+        assert "__CRISPLLM_" not in req_json and "__EDGEMEM_" not in req_json
 
 
 def test_streaming_sse_suppress_empty_buffering_deltas(tmp_path) -> None:
@@ -549,4 +549,4 @@ def test_streaming_sse_suppress_empty_buffering_deltas(tmp_path) -> None:
         assert len(emitted_chunks) < raw_count
         reconstructed = "".join(content_deltas)
         assert reconstructed == f"Your secret is {secret} verified."
-        assert "__EDGEMEM_" not in reconstructed
+        assert "__CRISPLLM_" not in reconstructed and "__EDGEMEM_" not in reconstructed

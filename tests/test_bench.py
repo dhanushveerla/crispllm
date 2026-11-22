@@ -315,8 +315,8 @@ class TestDeterministicSampling:
 
 class TestProxyTimingHeaders:
     def test_proxy_timing_headers_non_streaming(self, tmp_path: Path):
-        from edgemem.config import EdgeMemConfig
-        from edgemem.proxy.app import create_app
+        from crispllm.config import EdgeMemConfig
+        from crispllm.proxy.app import create_app
         from starlette.testclient import TestClient
 
         cfg = EdgeMemConfig()
@@ -353,8 +353,8 @@ class TestProxyTimingHeaders:
                 assert f"edgemem_proxy;dur={overhead:.2f}" in resp.headers["Server-Timing"]
 
     def test_proxy_timing_headers_streaming(self, tmp_path: Path):
-        from edgemem.config import EdgeMemConfig
-        from edgemem.proxy.app import create_app
+        from crispllm.config import EdgeMemConfig
+        from crispllm.proxy.app import create_app
         from starlette.testclient import TestClient
 
         cfg = EdgeMemConfig()
@@ -368,7 +368,7 @@ class TestProxyTimingHeaders:
             yield "data: " + json.dumps({"choices": [{"delta": {"content": " world"}}]}) + "\n\n"
             yield "data: [DONE]\n\n"
 
-        with patch("edgemem.proxy.app.stream_with_heartbeat") as mock_stream:
+        with patch("crispllm.proxy.app.stream_with_heartbeat") as mock_stream:
             async def fake_stream_fn(*args: Any, **kwargs: Any) -> Any:
                 on_first_data = kwargs.get("on_first_data")
                 if on_first_data:
@@ -605,7 +605,7 @@ class TestMetricsReportingAndSampleCounts:
         raw_summary = summarize_run_results(raw_results)
         table = format_comparison_table(raw_summary, summary)
         assert "Raw Baseline" in table
-        assert "EdgeMem" in table
+        assert "CrispLLM" in table or "EdgeMem" in table
         assert "Pass@1" in table
         assert "Prefill / TTFT (ms)" in table
         assert table.isascii()

@@ -1,13 +1,13 @@
 # ==============================================================================
-# EdgeMem Configuration Example (edgemem.example.toml)
+# CrispLLM Configuration Example (crispllm.example.toml)
 #
-# EdgeMem is a lightweight, unified memory & context proxy for AI coding.
-# Copy this file to edgemem.toml (in project root or ~/.config/edgemem/edgemem.toml)
+# CrispLLM is a lightweight, unified memory & context proxy for AI coding.
+# Copy this file to crispllm.toml (in project root or ~/.config/crispllm/crispllm.toml)
 # and adjust parameters as needed.
 # ==============================================================================
 
 [server]
-# Host interface and port for the EdgeMem proxy server.
+# Host interface and port for the CrispLLM proxy server.
 # Serves both OpenAI-compatible API at /v1/chat/completions and MCP at /mcp.
 host = "127.0.0.1"
 port = 8080
@@ -77,7 +77,7 @@ llm_synthesis = false
 # to the latest user message, maximizing KV-cache prefix hits in local runtimes.
 prefix_stable_assembly = true
 
-# Path to SQLite database file. If omitted, defaults to ~/.local/share/edgemem/memory.db
+# Path to SQLite database file. If omitted, defaults to ~/.local/share/crispllm/memory.db
 # db_path = "memory.db"
 
 [cloud]

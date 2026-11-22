@@ -6,10 +6,10 @@ import threading
 import time
 from typing import Callable
 
-from edgemem.config import ResourcesConfig
-from edgemem.proxy.sysinfo import SystemMemoryInfo, get_system_memory_info
+from crispllm.config import ResourcesConfig
+from crispllm.proxy.sysinfo import SystemMemoryInfo, get_system_memory_info
 
-logger = logging.getLogger("edgemem.proxy.watchdog")
+logger = logging.getLogger("crispllm.proxy.watchdog")
 
 
 @dataclass

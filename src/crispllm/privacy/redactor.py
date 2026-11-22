@@ -55,9 +55,11 @@ class RedactionSession:
             return self._secret_to_placeholder[secret]
         count = self._category_counters.get(category, 0) + 1
         self._category_counters[category] = count
-        token = f"__EDGEMEM_{category}_{count}__"
+        token = f"__CRISPLLM_{category}_{count}__"
+        legacy_token = f"__EDGEMEM_{category}_{count}__"
         self._secret_to_placeholder[secret] = token
         self._placeholder_to_secret[token] = secret
+        self._placeholder_to_secret[legacy_token] = secret
         return token
 
 
@@ -88,7 +90,8 @@ _BEARER_PATTERN = re.compile(
 _ENV_PATTERN = re.compile(
     r'(?i)(\b[A-Z0-9_]*(?:API_KEY|SECRET_KEY|SECRET|PASSWORD|PASSWD|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY)\b\s*[:=]\s*["\']?)([^"\'\s,;]{8,})(["\']?)'
 )
-_EDGEMEM_PLACEHOLDER_PATTERN = re.compile(r"__EDGEMEM_[A-Z]+_\d+__")
+_CRISPLLM_PLACEHOLDER_PATTERN = re.compile(r"__(?:CRISPLLM|EDGEMEM)_[A-Z]+_\d+__")
+_EDGEMEM_PLACEHOLDER_PATTERN = _CRISPLLM_PLACEHOLDER_PATTERN
 _ENV_SKIP_SUBSTRINGS = (
     "your-key-here",
     "changeme",
@@ -187,7 +190,7 @@ class SecretRedactor:
 
             def _sub_known(m: re.Match) -> str:
                 raw = m.group(0)
-                if raw.startswith("__EDGEMEM_"):
+                if raw.startswith(("__CRISPLLM_", "__EDGEMEM_")):
                     return raw
                 return session.get_or_create_placeholder(raw, "SECRET")
 
@@ -195,7 +198,7 @@ class SecretRedactor:
 
             def _sub_url(m: re.Match) -> str:
                 prefix, password, suffix = m.group(1), m.group(2), m.group(3)
-                if password.startswith("__EDGEMEM_"):
+                if password.startswith(("__CRISPLLM_", "__EDGEMEM_")):
                     return m.group(0)
                 placeholder = session.get_or_create_placeholder(password, "SECRET")
                 return f"{prefix}{placeholder}{suffix}"
@@ -204,7 +207,7 @@ class SecretRedactor:
 
             def _sub_bearer(m: re.Match) -> str:
                 prefix, token = m.group(1), m.group(2)
-                if token.startswith("__EDGEMEM_"):
+                if token.startswith(("__CRISPLLM_", "__EDGEMEM_")):
                     return m.group(0)
                 placeholder = session.get_or_create_placeholder(token, "SECRET")
                 return f"{prefix}{placeholder}"
@@ -213,7 +216,7 @@ class SecretRedactor:
 
             def _sub_env(m: re.Match) -> str:
                 prefix, val, suffix = m.group(1), m.group(2), m.group(3)
-                if val.startswith("__EDGEMEM_"):
+                if val.startswith(("__CRISPLLM_", "__EDGEMEM_")):
                     return m.group(0)
                 val_lower = val.lower()
                 if any(s in val_lower for s in self._env_skip_substrings):
@@ -226,7 +229,7 @@ class SecretRedactor:
         if self.config.redact_emails:
             def _sub_email(m: re.Match) -> str:
                 email = m.group(0)
-                if email.startswith("__EDGEMEM_"):
+                if email.startswith(("__CRISPLLM_", "__EDGEMEM_")):
                     return email
                 email_lower = email.lower()
                 if any(email_lower.endswith(s) for s in self._email_skip_suffixes):
@@ -247,7 +250,7 @@ class SecretRedactor:
         for custom_pattern in self._custom_patterns:
             def _sub_custom(m: re.Match) -> str:
                 raw = m.group(0)
-                if raw.startswith("__EDGEMEM_"):
+                if raw.startswith(("__CRISPLLM_", "__EDGEMEM_")):
                     return raw
                 return session.get_or_create_placeholder(raw, "CUSTOM")
 
@@ -294,7 +297,7 @@ class SecretRedactor:
     def restore_text(self, text: str, session: RedactionSession) -> str:
         if not text or not session.has_redactions:
             return text
-        if "__EDGEMEM_" not in text:
+        if "__CRISPLLM_" not in text and "__EDGEMEM_" not in text:
             return text
         mapping = session.placeholder_to_secret
         return self._placeholder_restore_pattern.sub(

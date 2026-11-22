@@ -1,6 +1,6 @@
 """edgemem.slicer.cache — OS-agnostic mtime-keyed SQLite tag cache.
 
-Cache location: platformdirs.user_cache_dir("edgemem") / "tags_v1.db"
+Cache location: platformdirs.user_cache_dir("crispllm") / "tags_v1.db"
 
 Schema:
   TABLE tags_cache
@@ -22,16 +22,16 @@ from typing import Any, Sequence
 
 from platformdirs import user_cache_dir
 
-from edgemem.slicer.tags import Tag
+from crispllm.slicer.tags import Tag
 
-logger = logging.getLogger("edgemem.slicer.cache")
+logger = logging.getLogger("crispllm.slicer.cache")
 
 _DB_VERSION = 2
 _TABLE = "tags_cache"
 
 
 def _db_path() -> Path:
-    cache_dir = Path(user_cache_dir("edgemem"))
+    cache_dir = Path(user_cache_dir("crispllm"))
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / f"tags_v{_DB_VERSION}.db"
 

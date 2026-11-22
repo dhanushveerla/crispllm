@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 from typing import Any, Sequence
 
-from edgemem.slicer.tags import (
+from crispllm.slicer.tags import (
     _DEF_NODE_TYPES,
     _IDENT_NODE_TYPES,
     _NAME_CHILD_FIELD,

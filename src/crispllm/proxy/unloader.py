@@ -8,10 +8,10 @@ import urllib.parse
 
 import httpx
 
-from edgemem.config import EdgeMemConfig
-from edgemem.proxy.budgeter import detect_local_backend
+from crispllm.config import EdgeMemConfig
+from crispllm.proxy.budgeter import detect_local_backend
 
-logger = logging.getLogger("edgemem.proxy.unloader")
+logger = logging.getLogger("crispllm.proxy.unloader")
 
 
 def get_ollama_generate_url(upstream_base_url: str) -> str:

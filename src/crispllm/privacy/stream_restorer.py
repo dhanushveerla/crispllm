@@ -2,12 +2,22 @@ from __future__ import annotations
 
 import re
 
-from edgemem.privacy.redactor import RedactionSession
+from crispllm.privacy.redactor import RedactionSession
 
 _PARTIAL_PREFIX_PATTERN = re.compile(
     r"""
     (?:
-        __EDGEMEM_[A-Z]+_\d+_?
+        __CRISPLLM_[A-Z]+_\d+_?
+      | __CRISPLLM_[A-Z]+_?
+      | __CRISPLLM_?
+      | __CRISPLL
+      | __CRISPL
+      | __CRISP
+      | __CRIS
+      | __CRI
+      | __CR
+      | __C
+      | __EDGEMEM_[A-Z]+_\d+_?
       | __EDGEMEM_[A-Z]+_?
       | __EDGEMEM_?
       | __EDGEME
@@ -28,7 +38,7 @@ class StreamRestorer:
     def __init__(self, session: RedactionSession) -> None:
         self.session = session
         self._buffer: str = ""
-        self._placeholder_pattern = re.compile(r"__EDGEMEM_[A-Z]+_\d+__")
+        self._placeholder_pattern = re.compile(r"__(?:CRISPLLM|EDGEMEM)_[A-Z]+_\d+__")
         self._partial_pattern = _PARTIAL_PREFIX_PATTERN
 
     def feed(self, chunk: str) -> str:

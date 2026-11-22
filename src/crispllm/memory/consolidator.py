@@ -13,11 +13,11 @@ from typing import Any
 
 import httpx
 
-from edgemem.config import EdgeMemConfig
-from edgemem.memory.store import Fact, MemoryStore
-from edgemem.privacy.redactor import sanitize_fact
+from crispllm.config import EdgeMemConfig
+from crispllm.memory.store import Fact, MemoryStore
+from crispllm.privacy.redactor import sanitize_fact
 
-logger = logging.getLogger("edgemem.memory.consolidator")
+logger = logging.getLogger("crispllm.memory.consolidator")
 
 
 @dataclass
